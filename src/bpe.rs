@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, atomic::AtomicU64}};
 
 pub type Idx = u32;
 pub type Word<C> = Arc<[C]>;
@@ -80,6 +80,7 @@ impl<C, I> Merge<C, I> {
 
 #[derive(Debug, Default)]
 pub struct BPE<C = u8> {
+  pub start_vocab_idx: AtomicU64,
   pub vocab: BTreeMap<Idx, Word<C>>,
   pub merges: Vec<Merge<C, Idx>>,
   pub pre_merges: BTreeMap<(Idx, Idx), Merge<C, Idx>>,
@@ -100,11 +101,13 @@ impl BPE<u8> {
       tokens.push(pre_token);
     }
     let mut bpe = BPE::new(tokens);
-    bpe._vocab_insert_all_single_byte(vocab_start_idx);
+    bpe._set_vocab_idx(vocab_start_idx);
+    bpe._vocab_insert_all_single_byte();
     bpe
   }
 
-  pub fn _vocab_insert_all_single_byte(&mut self, start_idx: Idx) -> Idx {
+  pub fn _vocab_insert_all_single_byte(&mut self) -> Idx {
+    let start_idx = self.start_vocab_idx.fetch_add(256, std::sync::atomic::Ordering::AcqRel) as Idx;
     let vocab = &mut self.vocab;
     for i in 0u8..=255 {
       vocab.insert(i as Idx + start_idx, [i].to_word());
@@ -116,6 +119,7 @@ impl BPE<u8> {
 impl<C: Clone> BPE<C> {
   pub fn new(words: Vec<PreToken<C, Idx>>) -> Self {
     Self {
+      start_vocab_idx: AtomicU64::new(0),
       vocab: BTreeMap::new(),
       merges: Vec::new(),
       pre_merges: BTreeMap::new(),
@@ -138,6 +142,14 @@ impl<C: Clone> BPE<C> {
         merge.add(i as u64, word.freq);
       }
     }
+  }
+
+  fn _set_vocab_idx(&mut self, start_idx: Idx) {
+    self.start_vocab_idx.store(start_idx as u64, std::sync::atomic::Ordering::Release);
+  }
+
+  fn _add_vocab_idx(&self) -> Idx {
+    self.start_vocab_idx.fetch_add(1, std::sync::atomic::Ordering::AcqRel) as Idx
   }
 
   fn merge(&mut self, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
@@ -198,7 +210,7 @@ impl<C: Clone> BPE<C> {
       .cloned() else {
       return
     };
-    let target_idx = self.vocab.len() as Idx;
+    let target_idx = self._add_vocab_idx();
     let changes = self.merge(&merge, target_idx);
     let merged_word = merge.merged_content();
     self.vocab.insert(target_idx, merged_word);
@@ -221,6 +233,7 @@ impl<C: Clone> BPE<C> {
       }
     }
     self.pre_merges.remove(&merge.tp);
+    self.merges.push(merge);
   }
 }
 
@@ -294,5 +307,40 @@ mod tests {
     .collect::<BTreeMap<_, _>>();
     assert_eq!(changes, answer);
     assert_eq!(merge.data.freq, -answer.get(&tp).cloned().unwrap().freq);
+  }
+
+  #[test]
+  fn test_bpe_step() {
+    let mut bpe = BPE::from_words(vec![
+      ("ababc".to_string(), 5),
+      ("ababcbabc".to_string(), 30),
+      ("abcbabcab".to_string(), 200),
+    ]);
+    bpe.init_training();
+    for _ in 0..3 {
+      bpe.step();
+    }
+    let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, String::from_utf8_lossy(&w).to_string())).skip(256).collect::<Vec<_>>();
+    assert_eq!(
+      result_vocab,
+      vec![
+        (256, "ab".to_string()),
+        (257, "abc".to_string()),
+        (258, "abcb".to_string()),
+      ]
+    );
+    let result_merges = bpe.merges.into_iter().map(|m| {
+      let left = String::from_utf8_lossy(&m.content.0).to_string();
+      let right = String::from_utf8_lossy(&m.content.1).to_string();
+      (left, right, m.data.freq)
+    }).collect::<Vec<_>>();
+    assert_eq!(
+      result_merges,
+      vec![
+        ("a".to_string(), "b".to_string(), 700),
+        ("ab".to_string(), "c".to_string(), 465),
+        ("abc".to_string(), "b".to_string(), 230),
+      ]
+    );
   }
 }
