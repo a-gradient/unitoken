@@ -1,5 +1,8 @@
 use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, atomic::AtomicU64}};
 
+use lazy_static::lazy_static;
+use ordermap::OrderMap;
+
 pub type Idx = u32;
 pub type Word<C> = Arc<[C]>;
 pub type Freq = i64;
@@ -114,6 +117,25 @@ impl BPE<u8> {
     }
     start_idx + 256
   }
+
+  pub fn save_vocab_json<W: std::io::Write>(&self, mut w: W) -> Result<(), std::io::Error> {
+    let mut map = OrderMap::new();
+    for (idx, word) in self.vocab.iter() {
+      let s = _printable(word);
+      map.insert(s, idx);
+    }
+    let json = serde_json::to_string_pretty(&map).unwrap();
+    write!(w, "{}", json)
+  }
+
+  pub fn save_merges_txt<W: std::io::Write>(&self, mut w: W) -> Result<(), std::io::Error> {
+    for merge in self.merges.iter() {
+      let left = _printable(&merge.content.0);
+      let right = _printable(&merge.content.1);
+      writeln!(w, "{} {} => {}", left, right, merge.data.freq)?;
+    }
+    Ok(())
+  }
 }
 
 impl<C: Clone> BPE<C> {
@@ -162,7 +184,7 @@ impl<C: Clone> BPE<C> {
       let mut new_idxs = Vec::with_capacity(w.idxs.len());
       let mut i = 0;
       let mut last_tp: Option<(Idx, Idx)> = None;
-      while i < w.idxs.len() - 1 {
+      while i + 1 < w.idxs.len() {
         let tp = (w.idxs[i], w.idxs[i + 1]);
         *local_freq.entry(tp).or_default() += 1;
         if tp == merge.tp {
@@ -202,13 +224,13 @@ impl<C: Clone> BPE<C> {
     changes
   }
 
-  fn step(&mut self) {
+  fn step(&mut self) -> bool {
     let Some(merge) = self
       .pre_merges
       .values()
       .max_by_key(|m| m.data.freq)
       .cloned() else {
-      return
+      return false;
     };
     let target_idx = self._add_vocab_idx();
     let changes = self.merge(&merge, target_idx);
@@ -234,6 +256,7 @@ impl<C: Clone> BPE<C> {
     }
     self.pre_merges.remove(&merge.tp);
     self.merges.push(merge);
+    true
   }
 }
 
@@ -257,6 +280,27 @@ impl ToWord<u8> for &str {
   fn to_word(self) -> Word<u8> {
     Arc::from(self.as_bytes().to_owned().into_boxed_slice())
   }
+}
+
+lazy_static! {
+  static ref PRINTABLE: BTreeMap<u8, char> = {
+    let mut map = BTreeMap::new();
+    for range in [33u8..=126, 161..=172, 174..=255].iter() {
+      for b in range.clone() {
+        map.insert(b as u8, b as char);
+      }
+    }
+    for b in 0u32..=255 {
+      map.entry(b as u8).or_insert(char::from_u32(b + 256).unwrap());
+    }
+    map
+  };
+}
+
+fn _printable(w: &Word<u8>) -> String {
+  w.iter()
+    .map(|b| PRINTABLE.get(b).copied().unwrap_or('.'))
+    .collect()
 }
 
 #[cfg(test)]
@@ -320,7 +364,7 @@ mod tests {
     for _ in 0..3 {
       bpe.step();
     }
-    let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, String::from_utf8_lossy(&w).to_string())).skip(256).collect::<Vec<_>>();
+    let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, _printable(&w))).skip(256).collect::<Vec<_>>();
     assert_eq!(
       result_vocab,
       vec![
@@ -330,8 +374,8 @@ mod tests {
       ]
     );
     let result_merges = bpe.merges.into_iter().map(|m| {
-      let left = String::from_utf8_lossy(&m.content.0).to_string();
-      let right = String::from_utf8_lossy(&m.content.1).to_string();
+      let left = _printable(&m.content.0);
+      let right = _printable(&m.content.1);
       (left, right, m.data.freq)
     }).collect::<Vec<_>>();
     assert_eq!(
@@ -342,5 +386,19 @@ mod tests {
         ("abc".to_string(), "b".to_string(), 230),
       ]
     );
+  }
+
+  #[test]
+  fn test_bpe_from_words() {
+    let input = std::fs::read_to_string("fixtures/tinystories_sample_5M_words.json").unwrap();
+    let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
+    let mut bpe = BPE::from_words(words);
+    bpe.init_training();
+    while bpe.vocab.len() < 1000 {
+      assert!(bpe.step());
+    }
+    std::fs::create_dir_all("out").ok();
+    bpe.save_vocab_json(std::fs::File::create("out/vocab.json").unwrap()).unwrap();
+    bpe.save_merges_txt(std::fs::File::create("out/merges.txt").unwrap()).unwrap();
   }
 }
