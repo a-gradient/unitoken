@@ -5,7 +5,6 @@ use std::{
   collections::BTreeMap,
   fs::{self, File},
   io::{Read as _, Seek},
-  os::windows::fs::MetadataExt,
 };
 
 use crate::Error;
@@ -36,7 +35,7 @@ pub fn pretokenizer(s: &str, pat: &Regex) -> Result<BTreeMap<String, u64>, Error
 }
 
 pub fn find_chunk_boundaries(path: &std::path::Path, desired_num_chunks: u32, split_special_token: &str) -> Vec<u64> {
-  let file_size = fs::metadata(path).unwrap().file_size();
+  let file_size = fs::metadata(path).unwrap().len();
   let chunk_size = file_size / desired_num_chunks as u64;
   let mini_chunk_size = 4096;
   let finder = memmem::Finder::new(split_special_token);
