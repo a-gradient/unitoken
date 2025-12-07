@@ -25,6 +25,15 @@ pub struct Merge<C, I> {
   pub data: MergeData,
 }
 
+impl<C, I> Merge<C, I> {
+  pub fn merged_content(&self) -> Word<C> where C: Clone {
+    let mut v = Vec::with_capacity(self.content.0.len() + self.content.1.len());
+    v.extend_from_slice(&self.content.0);
+    v.extend_from_slice(&self.content.1);
+    Arc::<[C]>::from(v.into_boxed_slice())
+  }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MergeData {
   pub occurs_in: BTreeSet<u64>,
@@ -75,6 +84,33 @@ pub struct BPE<C = u8> {
   pub merges: Vec<Merge<C, Idx>>,
   pub pre_merges: BTreeMap<(Idx, Idx), Merge<C, Idx>>,
   pub words: Vec<PreToken<C, Idx>>,
+}
+
+impl BPE<u8> {
+  pub fn from_words<I: IntoIterator<Item = (String, Freq)>>(words: I) -> Self {
+    let vocab_start_idx = 0;
+    let mut tokens = Vec::new();
+    for (w, freq) in words {
+      let idxs = w.bytes().map(|b| b as Idx + vocab_start_idx).collect::<Vec<_>>();
+      let pre_token = PreToken {
+        src: w.to_word(),
+        idxs,
+        freq,
+      };
+      tokens.push(pre_token);
+    }
+    let mut bpe = BPE::new(tokens);
+    bpe._vocab_insert_all_single_byte(vocab_start_idx);
+    bpe
+  }
+
+  pub fn _vocab_insert_all_single_byte(&mut self, start_idx: Idx) -> Idx {
+    let vocab = &mut self.vocab;
+    for i in 0u8..=255 {
+      vocab.insert(i as Idx + start_idx, [i].to_word());
+    }
+    start_idx + 256
+  }
 }
 
 impl<C: Clone> BPE<C> {
@@ -164,6 +200,49 @@ impl<C: Clone> BPE<C> {
     };
     let target_idx = self.vocab.len() as Idx;
     let changes = self.merge(&merge, target_idx);
+    let merged_word = merge.merged_content();
+    self.vocab.insert(target_idx, merged_word);
+    for (tp, data) in changes.iter() {
+      let entry = self.pre_merges.entry(*tp).or_insert_with(|| {
+        let content = (
+          self.vocab.get(&tp.0).unwrap().clone(),
+          self.vocab.get(&tp.1).unwrap().clone(),
+        );
+        Merge::new(*tp, content)
+      });
+      entry.target = Some(target_idx);
+      entry.data.freq += data.freq;
+      for doc_id in data.occurs_in.iter() {
+        if data.freq > 0 {
+          entry.data.occurs_in.insert(*doc_id);
+        } else {
+          entry.data.occurs_in.remove(doc_id);
+        }
+      }
+    }
+    self.pre_merges.remove(&merge.tp);
+  }
+}
+
+trait ToWord<C> {
+  fn to_word(self) -> Word<C>;
+}
+
+impl<C> ToWord<C> for Vec<C> {
+  fn to_word(self) -> Word<C> {
+    Arc::from(self.into_boxed_slice())
+  }
+}
+
+impl ToWord<u8> for &[u8] {
+  fn to_word(self) -> Word<u8> {
+    Arc::from(self.to_owned().into_boxed_slice())
+  }
+}
+
+impl ToWord<u8> for &str {
+  fn to_word(self) -> Word<u8> {
+    Arc::from(self.as_bytes().to_owned().into_boxed_slice())
   }
 }
 
@@ -174,27 +253,27 @@ mod tests {
   #[test]
   fn test_bpe_merge() {
     let mut bpe = BPE::default();
-    bpe.vocab.insert(0, Arc::from(&b"a"[..]));
-    bpe.vocab.insert(1, Arc::from(&b"b"[..]));
-    bpe.vocab.insert(2, Arc::from(&b"c"[..]));
-    bpe.vocab.insert(3, Arc::from(&b"d"[..]));
+    bpe.vocab.insert(0, "a".to_word());
+    bpe.vocab.insert(1, "b".to_word());
+    bpe.vocab.insert(2, "c".to_word());
+    bpe.vocab.insert(3, "d".to_word());
     bpe.words.push(PreToken {
-      src: Arc::from(&b"abcd"[..]),
+      src: "abcd".to_word(),
       idxs: vec![0, 1, 2, 3],
       freq: 5,
     });
     bpe.words.push(PreToken {
-      src: Arc::from(&b"abcdbcd"[..]),
+      src: "abcdbcd".to_word(),
       idxs: vec![0, 1, 2, 3, 1, 2, 3],
       freq: 30,
     });
     bpe.words.push(PreToken {
-      src: Arc::from(&b"abcbcdab"[..]),
+      src: "abcbcdab".to_word(),
       idxs: vec![0, 1, 2, 1, 2, 3, 0, 1],
       freq: 200,
     });
     bpe.init_training();
-    let tp = (1, 2);
+    let tp = (1, 2); // merging "b" and "c"
     let target = Idx::MAX;
     let merge = bpe.pre_merges.get(&tp).unwrap().clone();
     let changes = bpe.merge(&merge, target);
