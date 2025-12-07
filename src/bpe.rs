@@ -35,6 +35,11 @@ impl<C, I> Merge<C, I> {
     v.extend_from_slice(&self.content.1);
     Arc::<[C]>::from(v.into_boxed_slice())
   }
+
+  pub fn with_target(mut self, target: I) -> Self {
+    self.target = Some(target);
+    self
+  }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -192,21 +197,22 @@ impl<C: Clone> BPE<C> {
           i += 2;
           changes.entry(tp).or_default().freq -= w.freq;
           *local_freq.entry(tp).or_default() -= 1;
-          if let Some(tp) = last_tp {
-            let new_tp = (tp.0, target_idx);
-            changes.entry(tp).or_default().freq -= w.freq;
+          if let Some(old_tp) = last_tp {
+            let new_tp = (old_tp.0, target_idx);
+            changes.entry(old_tp).or_default().freq -= w.freq;
             changes.entry(new_tp).or_default().freq += w.freq;
-            *local_freq.entry(tp).or_default() -= 1;
+            *local_freq.entry(old_tp).or_default() -= 1;
             *local_freq.entry(new_tp).or_default() -= 1;
+            last_tp = Some(new_tp);
           }
           if i < w.idxs.len() {
-            let tp = (w.idxs[i - 1], w.idxs[i]);
-            let new_tp = (target_idx, tp.1);
-            changes.entry(tp).or_default().freq -= w.freq;
+            let old_tp = (tp.1, w.idxs[i]);
+            let new_tp = (target_idx, old_tp.1);
+            changes.entry(old_tp).or_default().freq -= w.freq;
             changes.entry(new_tp).or_default().freq += w.freq;
-            *local_freq.entry(tp).or_default() -= 1;
+            *local_freq.entry(old_tp).or_default() -= 1;
             *local_freq.entry(new_tp).or_default() -= 1;
-            last_tp = Some(tp);
+            last_tp = Some(new_tp);
           }
         } else {
           new_idxs.push(w.idxs[i]);
@@ -224,39 +230,44 @@ impl<C: Clone> BPE<C> {
     changes
   }
 
-  fn step(&mut self) -> bool {
+  fn step(&mut self) -> Option<Idx> where C: Ord {
+    // find the most frequent merge,
+    // if the frequency is the same, choose the lexicographically largest one.
     let Some(merge) = self
       .pre_merges
       .values()
-      .max_by_key(|m| m.data.freq)
+      .max_by_key(|m| (m.data.freq, m.content.clone()))
       .cloned() else {
-      return false;
+      return None;
     };
     let target_idx = self._add_vocab_idx();
     let changes = self.merge(&merge, target_idx);
+    let merge = merge.with_target(target_idx);
     let merged_word = merge.merged_content();
     self.vocab.insert(target_idx, merged_word);
-    for (tp, data) in changes.iter() {
-      let entry = self.pre_merges.entry(*tp).or_insert_with(|| {
+    for (tp, data) in changes {
+      if data.freq == 0 {
+        continue;
+      }
+      let entry = self.pre_merges.entry(tp).or_insert_with(|| {
         let content = (
           self.vocab.get(&tp.0).unwrap().clone(),
           self.vocab.get(&tp.1).unwrap().clone(),
         );
-        Merge::new(*tp, content)
+        Merge::new(tp, content)
       });
-      entry.target = Some(target_idx);
       entry.data.freq += data.freq;
-      for doc_id in data.occurs_in.iter() {
-        if data.freq > 0 {
-          entry.data.occurs_in.insert(*doc_id);
-        } else {
+      if data.freq > 0 {
+        entry.data.occurs_in.extend(data.occurs_in);
+      } else {
+        data.occurs_in.iter().for_each(|doc_id| {
           entry.data.occurs_in.remove(doc_id);
-        }
+        });
       }
     }
     self.pre_merges.remove(&merge.tp);
     self.merges.push(merge);
-    true
+    Some(target_idx)
   }
 }
 
@@ -339,13 +350,13 @@ mod tests {
       ((0, 1), MergeData::new(-235).occurs_in([0, 1])),
       ((0, target), MergeData::new(235).occurs_in([0, 1, 2])),
       ((1, 2), MergeData::new(-465).occurs_in([0, 1, 2])),
-      ((2, 1), MergeData::new(-400).occurs_in([2])),
+      ((2, 1), MergeData::new(-200).occurs_in([2])),
       ((2, 3), MergeData::new(-265).occurs_in([0, 1, 2])),
-      ((2, target), MergeData::new(200).occurs_in([2])),
       ((3, 1), MergeData::new(-30).occurs_in([1])),
       ((3, target), MergeData::new(30).occurs_in([1])),
-      ((target, 1), MergeData::new(200).occurs_in([2])),
+      ((target, 1), MergeData::new(0).occurs_in([2])),
       ((target, 3), MergeData::new(265).occurs_in([0, 1, 2])),
+      ((target, target), MergeData::new(200).occurs_in([2])),
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();
@@ -395,7 +406,7 @@ mod tests {
     let mut bpe = BPE::from_words(words);
     bpe.init_training();
     while bpe.vocab.len() < 1000 {
-      assert!(bpe.step());
+      bpe.step().unwrap();
     }
     std::fs::create_dir_all("out").ok();
     bpe.save_vocab_json(std::fs::File::create("out/vocab.json").unwrap()).unwrap();
