@@ -22,8 +22,30 @@ pub struct Merge<C, I> {
   pub tp: (I, I),
   pub content: (Word<C>, Word<C>),
   pub target: Option<I>,
+  pub data: MergeData,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct MergeData {
   pub occurs_in: BTreeSet<u64>,
   pub freq: Freq,
+}
+
+impl MergeData {
+  pub fn new(freq: Freq) -> Self {
+    Self {
+      occurs_in: BTreeSet::new(),
+      freq,
+    }
+  }
+
+  #[must_use]
+  pub fn occurs_in<I: IntoIterator<Item = u64>>(self, iter: I) -> Self {
+    Self {
+      occurs_in: iter.into_iter().collect(),
+      freq: self.freq,
+    }
+  }
 }
 
 impl<C, I> Merge<C, I> {
@@ -32,19 +54,18 @@ impl<C, I> Merge<C, I> {
       tp,
       content,
       target: None,
-      occurs_in: BTreeSet::new(),
-      freq: 0,
+      data: MergeData::default(),
     }
   }
 
   pub fn add(&mut self, doc_id: u64, freq: Freq) {
-    self.occurs_in.insert(doc_id);
-    self.freq += freq;
+    self.data.occurs_in.insert(doc_id);
+    self.data.freq += freq;
   }
 
   pub fn remove(&mut self, doc_id: &u64, freq: Freq) {
-    self.freq -= freq;
-    self.occurs_in.remove(doc_id);
+    self.data.freq -= freq;
+    self.data.occurs_in.remove(doc_id);
   }
 }
 
@@ -56,7 +77,7 @@ pub struct BPE<C = u8> {
   pub words: Vec<PreToken<C, Idx>>,
 }
 
-impl<C> BPE<C> {
+impl<C: Clone> BPE<C> {
   pub fn new(words: Vec<PreToken<C, Idx>>) -> Self {
     Self {
       vocab: BTreeMap::new(),
@@ -83,28 +104,38 @@ impl<C> BPE<C> {
     }
   }
 
-  fn merge(&mut self, merge: &Merge<C, Idx>) -> BTreeMap<(Idx, Idx), Freq> {
-    let mut changes = BTreeMap::<(Idx, Idx), Freq>::new();
-    for w in self.words.iter_mut() {
+  fn merge(&mut self, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
+    // all tp with target_idx MUST be positive, so that occurs_in should be added.
+    // while tp without target_idx MUST be negative, and occurs_in should be removed.
+    let mut changes = BTreeMap::<(Idx, Idx), MergeData>::new();
+    for (k, w) in self.words.iter_mut().enumerate() {
+      // local freq tracks the frequency changes within this word.
+      let mut local_freq = BTreeMap::<(Idx, Idx), Freq>::new();
       let mut new_idxs = Vec::with_capacity(w.idxs.len());
       let mut i = 0;
-      let mut last_tp = None;
+      let mut last_tp: Option<(Idx, Idx)> = None;
       while i < w.idxs.len() - 1 {
         let tp = (w.idxs[i], w.idxs[i + 1]);
+        *local_freq.entry(tp).or_default() += 1;
         if tp == merge.tp {
-          if let Some(target) = merge.target {
-            new_idxs.push(target);
-          }
+          new_idxs.push(target_idx);
           i += 2;
-          *changes.entry(tp).or_default() -= w.freq;
+          changes.entry(tp).or_default().freq -= w.freq;
+          *local_freq.entry(tp).or_default() -= 1;
           if let Some(tp) = last_tp {
-            *changes.entry(tp).or_default() -= w.freq;
-            *changes.entry((tp.0, Idx::MAX)).or_default() += w.freq;
+            let new_tp = (tp.0, target_idx);
+            changes.entry(tp).or_default().freq -= w.freq;
+            changes.entry(new_tp).or_default().freq += w.freq;
+            *local_freq.entry(tp).or_default() -= 1;
+            *local_freq.entry(new_tp).or_default() -= 1;
           }
           if i < w.idxs.len() {
             let tp = (w.idxs[i - 1], w.idxs[i]);
-            *changes.entry(tp).or_default() -= w.freq;
-            *changes.entry((Idx::MAX, tp.1)).or_default() += w.freq;
+            let new_tp = (target_idx, tp.1);
+            changes.entry(tp).or_default().freq -= w.freq;
+            changes.entry(new_tp).or_default().freq += w.freq;
+            *local_freq.entry(tp).or_default() -= 1;
+            *local_freq.entry(new_tp).or_default() -= 1;
             last_tp = Some(tp);
           }
         } else {
@@ -113,13 +144,26 @@ impl<C> BPE<C> {
           i += 1;
         }
       }
+
+      local_freq.iter().filter(|(_, i)| **i <= 0).for_each(|(tp, _)| {
+        changes.entry(*tp).and_modify(|d| { d.occurs_in.insert(k as _); });
+      });
+
       w.idxs = new_idxs;
     }
     changes
   }
 
   fn step(&mut self) {
-
+    let Some(merge) = self
+      .pre_merges
+      .values()
+      .max_by_key(|m| m.data.freq)
+      .cloned() else {
+      return
+    };
+    let target_idx = self.vocab.len() as Idx;
+    let changes = self.merge(&merge, target_idx);
   }
 }
 
@@ -137,7 +181,7 @@ mod tests {
     bpe.words.push(PreToken {
       src: Arc::from(&b"abcd"[..]),
       idxs: vec![0, 1, 2, 3],
-      freq: 4,
+      freq: 5,
     });
     bpe.words.push(PreToken {
       src: Arc::from(&b"abcdbcd"[..]),
@@ -145,28 +189,31 @@ mod tests {
       freq: 30,
     });
     bpe.words.push(PreToken {
-      src: Arc::from(&b"abcbcd"[..]),
-      idxs: vec![0, 1, 2, 1, 2, 3],
+      src: Arc::from(&b"abcbcdab"[..]),
+      idxs: vec![0, 1, 2, 1, 2, 3, 0, 1],
       freq: 200,
     });
     bpe.init_training();
-    let merge = bpe.pre_merges.get(&(1, 2)).unwrap().clone();
-    let changes = bpe.merge(&merge);
+    let tp = (1, 2);
+    let target = Idx::MAX;
+    let merge = bpe.pre_merges.get(&tp).unwrap().clone();
+    let changes = bpe.merge(&merge, target);
     println!("{:?}", changes);
     let answer = vec![
-      ((0, 1), -234),
-      ((0, Idx::MAX), 234),
-      ((1, 2), -464),
-      ((2, 1), -400),
-      ((2, 3), -264),
-      ((2, Idx::MAX), 200),
-      ((3, 1), -30),
-      ((3, Idx::MAX), 30),
-      ((Idx::MAX, 1), 200),
-      ((Idx::MAX, 3), 264),
+      ((0, 1), MergeData::new(-235).occurs_in([0, 1])),
+      ((0, target), MergeData::new(235).occurs_in([0, 1, 2])),
+      ((1, 2), MergeData::new(-465).occurs_in([0, 1, 2])),
+      ((2, 1), MergeData::new(-400).occurs_in([2])),
+      ((2, 3), MergeData::new(-265).occurs_in([0, 1, 2])),
+      ((2, target), MergeData::new(200).occurs_in([2])),
+      ((3, 1), MergeData::new(-30).occurs_in([1])),
+      ((3, target), MergeData::new(30).occurs_in([1])),
+      ((target, 1), MergeData::new(200).occurs_in([2])),
+      ((target, 3), MergeData::new(265).occurs_in([0, 1, 2])),
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();
     assert_eq!(changes, answer);
+    assert_eq!(merge.data.freq, -answer.get(&tp).cloned().unwrap().freq);
   }
 }
