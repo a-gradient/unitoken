@@ -107,7 +107,7 @@ impl<C, I> Merge<C, I> {
 }
 
 #[derive(Debug, Default)]
-pub struct BPE<C = u8> {
+pub struct BpeTrainer<C = u8> {
   pub start_vocab_idx: AtomicU64,
   pub vocab: BTreeMap<Idx, Word<C>>,
   pub merges: Vec<Merge<C, Idx>>,
@@ -115,7 +115,7 @@ pub struct BPE<C = u8> {
   pub words: Vec<PreToken<C, Idx>>,
 }
 
-impl BPE<u8> {
+impl BpeTrainer<u8> {
   pub fn from_words<I: IntoIterator<Item = (String, Freq)>>(words: I) -> Self {
     let vocab_start_idx = 0;
     let mut tokens = Vec::new();
@@ -128,7 +128,7 @@ impl BPE<u8> {
       };
       tokens.push(pre_token);
     }
-    let mut bpe = BPE::new(tokens);
+    let mut bpe = BpeTrainer::new(tokens);
     bpe._set_vocab_idx(vocab_start_idx);
     bpe._vocab_insert_all_single_byte();
     bpe
@@ -163,7 +163,7 @@ impl BPE<u8> {
   }
 }
 
-impl<C: Clone> BPE<C>
+impl<C: Clone> BpeTrainer<C>
 where
   Word<C>: WordExt
 {
@@ -202,115 +202,12 @@ where
     self.start_vocab_idx.fetch_add(1, std::sync::atomic::Ordering::AcqRel) as Idx
   }
 
-  fn _merge(words: &mut Vec<PreToken<C, Idx>>, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
-    // all tp with target_idx MUST be positive, so that occurs_in should be added.
-    // while tp without target_idx MUST be negative, and occurs_in should be removed.
-    let mut changes = BTreeMap::<(Idx, Idx), MergeData>::new();
-    for k in merge.data.occurs_in.iter().copied() {
-      let w = &mut words[k as usize];
-      // local freq tracks the frequency changes within this word.
-      let mut local_freq = BTreeMap::<(Idx, Idx), Freq>::new();
-      let w_idx = &w.idxs;
-      let w_freq = w.freq;
-      let mut new_idxs = Vec::with_capacity(w_idx.len());
-      let mut i = 0;
-      let mut last_tp: Option<(Idx, Idx)> = None;
-      while i + 1 < w_idx.len() {
-        let tp = (w_idx[i], w_idx[i + 1]);
-        *local_freq.entry(tp).or_default() += 1;
-        if tp == merge.tp {
-          new_idxs.push(target_idx);
-          i += 2;
-          changes.entry(tp).or_default().freq -= w_freq;
-          *local_freq.entry(tp).or_default() -= 1;
-          // deal with left neighbor,
-          // e.g. in "abcd", when merging "b" and "c",
-          // old_tp = ("a", "b"), new_tp = ("a", "bc")
-          if let Some(old_tp) = last_tp {
-            let new_tp = (old_tp.0, target_idx);
-            changes.entry(old_tp).or_default().freq -= w_freq;
-            changes.entry(new_tp).or_default().freq += w_freq;
-            *local_freq.entry(old_tp).or_default() -= 1;
-            *local_freq.entry(new_tp).or_default() -= 1;
-            // if i >= w_idx.len(), loop is end, and last_tp never reads
-            // last_tp = Some(new_tp);
-          }
-          // deal with right neighbor, notice i+=2 above
-          // e.g. in "abcd", when merging "b" and "c",
-          // old_tp = ("c", "d"), new_tp = ("bc", "d")
-          if i < w_idx.len() {
-            let old_tp = (tp.1, w_idx[i]);
-            let new_tp = (target_idx, old_tp.1);
-            changes.entry(old_tp).or_default().freq -= w_freq;
-            changes.entry(new_tp).or_default().freq += w_freq;
-            // old_tp is not increased, so that it should not be decreased
-            *local_freq.entry(old_tp).or_default() -= 0;
-            // when combining "b" and "c" in "bcbc",
-            // new_tp=("bc", "b") would be false positive occurs_in
-            *local_freq.entry(new_tp).or_default() -= 1;
-            last_tp = Some(new_tp);
-          }
-        } else {
-          new_idxs.push(w_idx[i]);
-          last_tp = Some(tp);
-          i += 1;
-        }
-      }
-      if i < w_idx.len() {
-        new_idxs.push(w_idx[i]);
-      }
-
-      local_freq.iter().filter(|(_, i)| **i <= 0).for_each(|(tp, _)| {
-        changes.entry(*tp).and_modify(|d| { d.occurs_in.insert(k as _); });
-      });
-
-      w.idxs = new_idxs;
-    }
-    changes
-  }
-
-  fn _update_merge_map(merge_map: &mut BTreeMap<(Idx, Idx), Merge<C, Idx>>, merge: &Merge<C, Idx>, changes: BTreeMap<(Idx, Idx), MergeData>, vocab: Option<&BTreeMap<Idx, Word<C>>>) {
-    for (tp, data) in changes {
-      if tp == merge.tp {
-        assert_eq!(-data.freq, merge.data.freq);
-        continue;
-      }
-      if data.freq == 0 {
-        continue;
-      }
-      let entry = merge_map.entry(tp);
-      let entry = match entry {
-        btree_map::Entry::Occupied(e) => e.into_mut(),
-        btree_map::Entry::Vacant(e) => {
-          if let Some(vocab) = vocab {
-            let content = (
-              vocab.get(&tp.0).unwrap().clone(),
-              vocab.get(&tp.1).unwrap().clone(),
-            );
-            e.insert(Merge::new(tp, content))
-          } else {
-            continue;
-          }
-        }
-      };
-      // println!("  Change {:?} {:?} {:?}: freq {} -> {}", tp, entry.content.0.display(), entry.content.1.display(), entry.data.freq, entry.data.freq + data.freq);
-      entry.data.freq += data.freq;
-      if data.freq > 0 {
-        entry.data.occurs_in.extend(data.occurs_in);
-      } else {
-        data.occurs_in.iter().for_each(|doc_id| {
-          entry.data.occurs_in.remove(doc_id);
-        });
-      }
-    }
-  }
-
   fn update_pre_merges(&mut self, merge: &Merge<C, Idx>, changes: BTreeMap<(Idx, Idx), MergeData>) {
-    Self::_update_merge_map(&mut self.pre_merges, merge, changes, Some(&self.vocab));
+    _update_merge_map(&mut self.pre_merges, merge, changes, Some(&self.vocab));
   }
 
   fn merge(&mut self, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
-    Self::_merge(&mut self.words, merge, target_idx)
+    _merge(&mut self.words, merge, target_idx)
   }
 
   fn _get_largest_merge(&self) -> Option<Merge<C, Idx>> where C: Ord {
@@ -331,6 +228,7 @@ where
     let merge = merge.with_target(target_idx);
     let merged_word = merge.merged_content();
     self.vocab.insert(target_idx, merged_word);
+    assert_eq!(-changes.get(&merge.tp).map(|i| i.freq).unwrap_or(0), merge.data.freq);
     self.update_pre_merges(&merge, changes);
     self.pre_merges.remove(&merge.tp);
     self.merges.push(merge);
@@ -408,6 +306,117 @@ fn _printable(w: &Word<u8>) -> String {
     .collect()
 }
 
+fn _merge<C, I>(words: &mut Vec<PreToken<C, I>>, merge: &Merge<C, I>, target_idx: I) -> BTreeMap<(I, I), MergeData>
+where
+  I: Ord + Copy,
+  C: Clone,
+{
+  // all tp with target_idx MUST be positive, so that occurs_in should be added.
+  // while tp without target_idx MUST be negative, and occurs_in should be removed.
+  let mut changes = BTreeMap::<(I, I), MergeData>::new();
+  for k in merge.data.occurs_in.iter().copied() {
+    let w = &mut words[k as usize];
+    // local freq tracks the frequency changes within this word.
+    let mut local_freq = BTreeMap::<(I, I), Freq>::new();
+    let w_idx = &w.idxs;
+    let w_freq = w.freq;
+    let mut new_idxs = Vec::with_capacity(w_idx.len());
+    let mut i = 0;
+    let mut last_tp: Option<(I, I)> = None;
+    while i + 1 < w_idx.len() {
+      let tp = (w_idx[i], w_idx[i + 1]);
+      *local_freq.entry(tp).or_default() += 1;
+      if tp == merge.tp {
+        new_idxs.push(target_idx);
+        i += 2;
+        changes.entry(tp).or_default().freq -= w_freq;
+        *local_freq.entry(tp).or_default() -= 1;
+        // deal with left neighbor,
+        // e.g. in "abcd", when merging "b" and "c",
+        // old_tp = ("a", "b"), new_tp = ("a", "bc")
+        if let Some(old_tp) = last_tp {
+          let new_tp = (old_tp.0, target_idx);
+          changes.entry(old_tp).or_default().freq -= w_freq;
+          changes.entry(new_tp).or_default().freq += w_freq;
+          *local_freq.entry(old_tp).or_default() -= 1;
+          *local_freq.entry(new_tp).or_default() -= 1;
+          // if i >= w_idx.len(), loop is end, and last_tp never reads
+          // last_tp = Some(new_tp);
+        }
+        // deal with right neighbor, notice i+=2 above
+        // e.g. in "abcd", when merging "b" and "c",
+        // old_tp = ("c", "d"), new_tp = ("bc", "d")
+        if i < w_idx.len() {
+          let old_tp = (tp.1, w_idx[i]);
+          let new_tp = (target_idx, old_tp.1);
+          changes.entry(old_tp).or_default().freq -= w_freq;
+          changes.entry(new_tp).or_default().freq += w_freq;
+          // old_tp is not increased, so that it should not be decreased
+          *local_freq.entry(old_tp).or_default() -= 0;
+          // when combining "b" and "c" in "bcbc",
+          // new_tp=("bc", "b") would be false positive occurs_in
+          *local_freq.entry(new_tp).or_default() -= 1;
+          last_tp = Some(new_tp);
+        }
+      } else {
+        new_idxs.push(w_idx[i]);
+        last_tp = Some(tp);
+        i += 1;
+      }
+    }
+    if i < w_idx.len() {
+      new_idxs.push(w_idx[i]);
+    }
+
+    local_freq.iter().filter(|(_, i)| **i <= 0).for_each(|(tp, _)| {
+      changes.entry(*tp).and_modify(|d| { d.occurs_in.insert(k as _); });
+    });
+
+    w.idxs = new_idxs;
+  }
+  changes
+}
+
+fn _update_merge_map<C, I>(merge_map: &mut BTreeMap<(I, I), Merge<C, I>>, merge: &Merge<C, I>, changes: BTreeMap<(I, I), MergeData>, vocab: Option<&BTreeMap<I, Word<C>>>)
+where
+  I: Ord + Copy,
+  C: Clone,
+  Word<C>: WordExt,
+{
+  for (tp, data) in changes {
+    if tp == merge.tp {
+      continue;
+    }
+    if data.freq == 0 {
+      continue;
+    }
+    let entry = merge_map.entry(tp);
+    let entry = match entry {
+      btree_map::Entry::Occupied(e) => e.into_mut(),
+      btree_map::Entry::Vacant(e) => {
+        if let Some(vocab) = vocab {
+          let content = (
+            vocab.get(&tp.0).unwrap().clone(),
+            vocab.get(&tp.1).unwrap().clone(),
+          );
+          e.insert(Merge::new(tp, content))
+        } else {
+          continue;
+        }
+      }
+    };
+    // println!("  Change {:?} {:?} {:?}: freq {} -> {}", tp, entry.content.0.display(), entry.content.1.display(), entry.data.freq, entry.data.freq + data.freq);
+    entry.data.freq += data.freq;
+    if data.freq > 0 {
+      entry.data.occurs_in.extend(data.occurs_in);
+    } else {
+      data.occurs_in.iter().for_each(|doc_id| {
+        entry.data.occurs_in.remove(doc_id);
+      });
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -421,7 +430,7 @@ mod tests {
         freq,
       }
     }
-    fn lookup(bpe: &BPE, s: &str) -> Option<Idx> {
+    fn lookup(bpe: &BpeTrainer, s: &str) -> Option<Idx> {
       bpe.vocab.iter().find_map(|(i, w)| {
         if w.as_ref() == s.as_bytes() {
           Some(*i)
@@ -430,7 +439,7 @@ mod tests {
         }
       })
     }
-    fn display(bpe: &BPE, changes: &BTreeMap<(u32, u32), MergeData>) -> String {
+    fn display(bpe: &BpeTrainer, changes: &BTreeMap<(u32, u32), MergeData>) -> String {
       let mut parts = Vec::new();
       let target = ("__target__").to_word();
       for (tp, data) in changes.iter() {
@@ -441,7 +450,7 @@ mod tests {
       format!("{{\n  {}\n}}", parts.join(",\n  "))
     }
 
-    let mut bpe = BPE::default();
+    let mut bpe = BpeTrainer::default();
     bpe.vocab.extend(
       ('a' ..= 'z').enumerate().map(|(i, c)| (i as Idx, c.to_string().to_word()))
     );
@@ -503,7 +512,7 @@ mod tests {
 
   #[test]
   fn test_bpe_step() {
-    let mut bpe = BPE::from_words(vec![
+    let mut bpe = BpeTrainer::from_words(vec![
       ("ababc".to_string(), 5),
       ("ababcbabc".to_string(), 30),
       ("abcbabcab".to_string(), 200),
@@ -541,7 +550,7 @@ mod tests {
     const NAME: &str = "tinystories_sample_5M";
     let input = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
-    let mut bpe = BPE::from_words(words);
+    let mut bpe = BpeTrainer::from_words(words);
     bpe.init_training();
     while bpe.vocab.len() < 1000 {
       bpe.step().unwrap();
