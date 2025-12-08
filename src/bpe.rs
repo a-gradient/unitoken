@@ -232,9 +232,10 @@ where
             changes.entry(new_tp).or_default().freq += w_freq;
             *local_freq.entry(old_tp).or_default() -= 1;
             *local_freq.entry(new_tp).or_default() -= 1;
-            last_tp = Some(new_tp);
+            // if i >= w_idx.len(), loop is end, and last_tp never reads
+            // last_tp = Some(new_tp);
           }
-          // deal with right neighbor,
+          // deal with right neighbor, notice i+=2 above
           // e.g. in "abcd", when merging "b" and "c",
           // old_tp = ("c", "d"), new_tp = ("bc", "d")
           if i < w_idx.len() {
@@ -244,6 +245,8 @@ where
             changes.entry(new_tp).or_default().freq += w_freq;
             // old_tp is not increased, so that it should not be decreased
             *local_freq.entry(old_tp).or_default() -= 0;
+            // when combining "b" and "c" in "bcbc",
+            // new_tp=("bc", "b") would be false positive occurs_in
             *local_freq.entry(new_tp).or_default() -= 1;
             last_tp = Some(new_tp);
           }
@@ -365,8 +368,13 @@ lazy_static! {
         map.insert(b as u8, b as char);
       }
     }
+    let mut i = 0;
+    let mut next_char = || {
+      i += 1;
+      char::from_u32(i + 255).unwrap()
+    };
     for b in 0u32..=255 {
-      map.entry(b as u8).or_insert(char::from_u32(b + 256).unwrap());
+      map.entry(b as u8).or_insert_with(&mut next_char);
     }
     map
   };
@@ -461,6 +469,13 @@ mod tests {
       ("w", "h", MergeData::new(-10).occurs_in([0])),
       ("w", "he", MergeData::new(10).occurs_in([0])),
       ("he", "r", MergeData::new(10).occurs_in([0])),
+    ])]);
+
+    _test_bpe_merge(&[("aaa", 10), ("aaaa", 1)],
+    &[(("a", "a"), vec![
+      ("a", "a", MergeData::new(-23).occurs_in([0, 1])),
+      ("aa", "a", MergeData::new(10).occurs_in([0, 1])),
+      ("aa", "aa", MergeData::new(1).occurs_in([1])),
     ])]);
   }
 
