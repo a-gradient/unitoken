@@ -7,6 +7,10 @@ pub enum MyError {
   Io(#[from] std::io::Error),
   #[error("Regex error: {0}")]
   Regex(#[from] fancy_regex::Error),
+  #[error("UTF-8 error: {0}")]
+  Utf8(#[from] std::str::Utf8Error),
+  #[error("Out of vocabulary bytes: {0}")]
+  OovBytes(String),
 }
 
 pub type MyResult<T> = Result<T, MyError>;

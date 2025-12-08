@@ -3,6 +3,8 @@ use std::{collections::{BTreeMap, BTreeSet, btree_map}, fmt::Debug, sync::{Arc, 
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
 
+use crate::MyResult;
+
 pub type Idx = u32;
 pub type Word<C> = Arc<[C]>;
 pub type Freq = i64;
@@ -233,6 +235,92 @@ where
     self.pre_merges.remove(&merge.tp);
     self.merges.push(merge);
     Some(target_idx)
+  }
+
+  pub fn finish(self) -> BpeEncoder<C> where C: Ord {
+    let merges = self.merges
+      .into_iter()
+      .map(|m| (m.tp, m.target.unwrap()))
+      .collect();
+    BpeEncoder::new(self.vocab, merges)
+  }
+}
+
+pub struct BpeEncoder<C = u8> {
+  pub vocab_bytes: BTreeMap<C, Idx>,
+  pub vocab_rev: BTreeMap<Word<C>, Idx>,
+  pub vocab: BTreeMap<Idx, Word<C>>,
+  pub merges: Vec<((Idx, Idx), Idx)>,
+  pub pre_merge_map: BTreeMap<(Idx, Idx), Merge<C, Idx>>,
+}
+
+impl<C: Ord + Clone> BpeEncoder<C>
+where
+  Word<C>: WordExt
+{
+  pub fn new(vocab: BTreeMap<Idx, Word<C>>, merges: Vec<((Idx, Idx), Idx)>) -> Self {
+    let vocab_rev = vocab
+      .iter()
+      .map(|(k, v)| (v.clone(), *k))
+      .collect();
+    let vocab_bytes = vocab
+      .iter()
+      .filter_map(|(k, v)| {
+        if v.len() == 1 {
+          Some((v[0].clone(), *k))
+        } else {
+          None
+        }
+      })
+      .collect();
+    let pre_merge_map = merges.iter().copied().map(|(tp, target)| {
+      (tp, Merge::new(tp, (
+        vocab.get(&tp.0).unwrap().clone(),
+        vocab.get(&tp.1).unwrap().clone(),
+      )).with_target(target))
+    }).collect::<BTreeMap<_, _>>();
+    Self {
+      vocab_bytes,
+      vocab_rev,
+      vocab,
+      merges,
+      pre_merge_map,
+    }
+  }
+
+  pub fn _pretoken(&self, word: Word<C>, freq: Freq) -> MyResult<PreToken<C, Idx>> {
+    let idxs = word.iter()
+      .map(|c| self.vocab_bytes.get(c).copied().ok_or_else(|| crate::MyError::OovBytes(vec![c.clone()].to_word().display())))
+      .collect::<Result<_, _>>()?;
+    Ok(PreToken { src: word, idxs, freq })
+  }
+
+  pub fn encode(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
+    let mut  words = input
+      .iter()
+      .map(|w| self._pretoken(w.clone(), 1))
+      .collect::<Result<Vec<_>, _>>()?;
+    let mut pre_merges = self.pre_merge_map.clone();
+
+    // init
+    for (i, word) in words.iter().enumerate() {
+      for (j1, j2) in word.idxs.iter().copied().zip(word.idxs.iter().skip(1).copied()) {
+        let tp = (j1, j2);
+        if let Some(merge) = pre_merges.get_mut(&tp) {
+          merge.add(i as u64, 1);
+        }
+      }
+    }
+
+    for (tp, target) in &self.merges {
+      let Some(merge) = pre_merges.remove(&tp) else {
+        continue;
+      };
+      let changes = _merge(&mut words, &merge, *target);
+      _update_merge_map(&mut pre_merges, &merge, changes, None);
+    }
+
+    Ok(words.into_iter().map(|i| i.idxs.to_word()).collect())
   }
 }
 
@@ -552,7 +640,7 @@ mod tests {
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
     let mut bpe = BpeTrainer::from_words(words);
     bpe.init_training();
-    while bpe.vocab.len() < 1000 {
+    while bpe.vocab.len() < 1999 {
       bpe.step().unwrap();
       // let m = &bpe.merges.last().unwrap();
       // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);

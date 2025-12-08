@@ -201,7 +201,6 @@ mod tests {
     let input = std::fs::read_to_string("fixtures/tinystories_sample_5M.txt").unwrap();
     let tokens = pretokenizer(&input, &RE).unwrap();
     assert_eq!(tokens.get(" the").cloned().unwrap_or(0), 48886);
-    // serde_json::to_writer_pretty(std::fs::File::create("fixtures/tinystories_sample_5M_words.json").unwrap(), &tokens).unwrap();
   }
 
   #[test]
@@ -223,7 +222,8 @@ mod tests {
 
   #[test]
   fn test_get_words_from_file() {
-    let path = std::path::Path::new("fixtures/tinystories_sample_5M.txt");
+    const NAME: &str = "tinystories_sample_5M";
+    let path = format!("fixtures/{NAME}.txt");
     let num_chunks = 16;
     let words = get_words_from_file(
       path,
@@ -233,5 +233,10 @@ mod tests {
     )
     .unwrap();
     assert_eq!(words.get(" the").cloned().unwrap_or(0), 48886);
+    std::fs::create_dir_all("out").ok();
+    serde_json::to_writer_pretty(std::fs::File::create(format!("out/{NAME}_words.json")).unwrap(), &words).unwrap();
+    let answer = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();
+    let expected: BTreeMap<String, Freq> = serde_json::from_str(&answer).unwrap();
+    assert_eq!(words, expected);
   }
 }
