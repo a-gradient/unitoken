@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate tracing;
+
 use clap::{Parser, Subcommand};
 use std::{
   collections::BTreeMap, fs, path::{Path, PathBuf}
@@ -13,6 +16,8 @@ use unitoken::{
 struct Cli {
   #[command(subcommand)]
   command: Commands,
+  #[arg(short, long, action = clap::ArgAction::Count)]
+  verbose: u8,
 }
 
 #[derive(Subcommand)]
@@ -21,22 +26,35 @@ enum Commands {
   Encode(EncodeArgs),
 }
 
+impl Commands {
+  fn verbose(&self) -> u8 {
+    match self {
+      Commands::Train(args) => args.verbose,
+      Commands::Encode(args) => args.verbose,
+    }
+  }
+}
+
 #[derive(Parser)]
 struct TrainArgs {
-  #[arg(long = "special-tokens")]
-  special_tokens_path: Option<PathBuf>,
-  #[arg(short = 'c', long = "chunks", default_value = "1024")]
-  num_chunks: u32,
+  #[arg(short, long, action = clap::ArgAction::Count)]
+  verbose: u8,
   #[arg(short, long = "out", default_value = "out")]
   out_dir: PathBuf,
   #[arg(short='s', long, default_value = "10000")]
   vocab_size: u32,
+  #[arg(short = 'c', long = "chunks", default_value = "1024")]
+  num_chunks: u32,
+  #[arg(long = "special-tokens")]
+  special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
   input_file: PathBuf,
 }
 
 #[derive(Parser)]
 struct EncodeArgs {
+  #[arg(short, long, action = clap::ArgAction::Count)]
+  verbose: u8,
   #[arg(short, long = "out", default_value = "out")]
   out_dir: PathBuf,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
@@ -45,6 +63,7 @@ struct EncodeArgs {
 
 fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chunks: u32, special_tokens: Vec<String>) -> BTreeMap<String, i64> {
   if output.as_ref().exists() {
+    info!("pretokenize file already exists, loading from {}", output.as_ref().display());
     let result = serde_json::from_reader(fs::File::open(output).expect("open _words file")).expect("read _words file");
     return result;
   }
@@ -80,8 +99,11 @@ fn train_bpe<P: AsRef<Path>>(
   let mut bpe = BpeTrainer::from_words(words, special_tokens);
   let start_vocab_idx = bpe.start_vocab_idx.load(std::sync::atomic::Ordering::Acquire) as usize;
   bpe.init_training();
-  for _ in start_vocab_idx..vocab_size as usize {
-    bpe.step();
+  for i in start_vocab_idx..vocab_size as usize {
+    if bpe.step().is_none() {
+      warn!(vocab_size=i, "No more merges can be made, stopping training early");
+      break;
+    }
   }
 
   let vocab_filename = format!("vocab.{file_stem}.json");
@@ -102,8 +124,14 @@ fn run_train(args: TrainArgs) {
     let content = fs::read_to_string(special_tokens_path).expect("Failed to read special tokens file");
     lines_of(&content)
   } else {
-    vec![]
+    lines_of(include_str!("../fixtures/default_special_tokens.txt"))
   };
+  debug!("Special tokens: {:?}", special_tokens);
+  debug!("Vocabulary size: {}", args.vocab_size);
+  debug!("Number of chunks: {}", args.num_chunks);
+  debug!("Input file: {}", args.input_file.display());
+  debug!("Output directory: {}", args.out_dir.display());
+  info!("Training BPE model...");
   train_bpe(
     args.input_file,
     args.vocab_size,
@@ -115,6 +143,13 @@ fn run_train(args: TrainArgs) {
 
 fn main() {
   let cli = Cli::parse();
+  let verbose = cli.verbose + cli.command.verbose();
+  match verbose {
+    0 => tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init(),
+    1 => tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init(),
+    _ => tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init(),
+  }
+  debug!("Verbosity level: {}", verbose);
   match cli.command {
     Commands::Train(train_args) => {
       run_train(train_args);

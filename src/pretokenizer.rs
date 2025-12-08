@@ -3,7 +3,7 @@ use lazy_static::lazy_static;
 use memchr::memmem;
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use std::{
-  collections::BTreeMap,
+  collections::{BTreeMap, BTreeSet},
   fs::{self, File},
   io::{Read as _, Seek},
   path::Path,
@@ -40,6 +40,12 @@ pub fn find_chunk_boundaries<P: AsRef<Path>>(
   let chunk_size = file_size / desired_num_chunks as u64;
   let mini_chunk_size = 4096;
   let finder = memmem::Finder::new(split_special_token);
+  debug!(
+    file_size = file_size,
+    chunk_size = chunk_size,
+    desired_num_chunks = desired_num_chunks,
+    "find_chunk_boundaries"
+  );
 
   let mut boundaries = Vec::new();
   for i in 0..(desired_num_chunks) {
@@ -67,14 +73,9 @@ pub fn find_chunk_boundaries<P: AsRef<Path>>(
     }
   }
 
-  let mut set = std::collections::BTreeSet::new();
-  let mut deduplicated_boundaries = boundaries
-    .iter()
-    .filter(|&item| set.insert(*item))
-    .cloned()
-    .collect::<Vec<u64>>();
-  deduplicated_boundaries.sort();
-  Ok(deduplicated_boundaries)
+  let deduplicated_boundaries = boundaries.into_iter().collect::<BTreeSet<_>>();
+  debug!(boundaries.len=?deduplicated_boundaries.len(), "find_chunk_boundaries");
+  Ok(deduplicated_boundaries.into_iter().collect())
 }
 
 pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Vec<String>) -> MyResult<Vec<(&'a str, bool)>> {
@@ -112,6 +113,7 @@ pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Vec<String>) -> 
 pub fn get_words_from_segment<P: AsRef<Path>>(
   path: P, special_tokens: &Vec<String>, offset: u64, len: usize,
 ) -> MyResult<BTreeMap<String, Freq>> {
+  let _span = trace_span!("get_words_from_segment", offset = offset, len = len).entered();
   let mut file = File::open(&path)?;
   file.seek(std::io::SeekFrom::Start(offset))?;
   let mut buffer = vec![0; len];
@@ -125,6 +127,7 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
       *words.entry(token).or_default() += count;
     }
   }
+  trace!(words_len=?words.len(), "result");
   Ok(words)
 }
 

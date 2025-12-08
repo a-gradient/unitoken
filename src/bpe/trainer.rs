@@ -88,6 +88,7 @@ where
   }
 
   pub fn init_training(&mut self) {
+    debug!("Initializing BPE training with {} words", self.words.len());
     self.pre_merges.clear();
     for (i, word) in self.words.iter().enumerate() {
       for (j1, j2) in word.idxs.iter().copied().zip(word.idxs.iter().skip(1).copied()) {
