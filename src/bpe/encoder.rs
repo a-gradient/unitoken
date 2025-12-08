@@ -110,7 +110,10 @@ where
 
   fn _new_pre_merge_map(&self) -> BTreeMap<(Idx, Idx), Merge<C, Idx>> {
     let mut pre_merges = self.pre_merge_map.clone();
-    pre_merges.iter_mut().for_each(|i| i.1.data.freq = 0);
+    pre_merges.iter_mut().for_each(|i| {
+      i.1.data.freq = 0;
+      i.1.data.occurs_in.clear();
+    });
     pre_merges
   }
 
@@ -122,6 +125,9 @@ where
   ///
   /// See [`Self::encode_words`] for cached version
   pub fn _encode_words(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
+    if input.len() == 0 {
+      return Ok(Vec::new());
+    }
     let mut words = input
       .iter()
       .map(|w| self._pretoken(w.clone(), 1))
@@ -235,5 +241,22 @@ mod tests {
     // for ((i, src), (r1, r2)) in input.iter().enumerate().zip(result.iter().zip(result2.iter())) {
     //   assert_eq!(r1, r2, "[{i}] src={}", src.display());
     // }
+  }
+
+  #[test]
+  fn test_cache() {
+    const NAME: &str = "tinystories_sample_5M";
+    let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap()).unwrap();
+    let input = input.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<_>>();
+    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{NAME}.json")).unwrap()).unwrap();
+    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{NAME}.txt")).unwrap(), &vocab).unwrap();
+    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
+    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    let mut bpe = BpeEncoder::new(vocab, merges);
+    bpe.cache = Cache::new(input.len() as u64 * 6 / 5);
+    let result1 = bpe.encode_words(&input).unwrap();
+    let result2 = bpe.encode_words(&input).unwrap();
+    assert_eq!(result1, result2);
+    println!("input size: {}, cache size: {}", input.len(), bpe.cache.weighted_size())
   }
 }
