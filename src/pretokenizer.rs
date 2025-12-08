@@ -120,13 +120,9 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
   let content = String::from_utf8_lossy(&buffer);
   let parts = split_special_tokens(&content, &special_tokens)?;
   let mut words = BTreeMap::new();
-  for (part, is_special) in parts {
-    if is_special {
-      *words.entry(part.to_string()).or_default() += 1;
-    } else {
-      for (token, count) in pretokenizer(part, &RE)? {
-        *words.entry(token).or_default() += count;
-      }
+  for (part, _) in parts.iter().filter(|(_, is_special)| !is_special) {
+    for (token, count) in pretokenizer(part, &RE)? {
+      *words.entry(token).or_default() += count;
     }
   }
   Ok(words)
@@ -156,6 +152,17 @@ pub fn get_words_from_file<P: AsRef<Path>>(
       },
     )?;
   Ok(words)
+}
+
+pub fn sort_words(words: &BTreeMap<String, Freq>) -> ordermap::OrderMap<String, Freq> {
+  let mut word_freq_vec: Vec<(String, Freq)> = words.iter().map(|(k,v)| (k.clone(), *v)).collect();
+  word_freq_vec.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)).reverse());
+  word_freq_vec.into_iter().collect()
+}
+
+pub fn save_words<W: std::io::Write>(w: W, words: &ordermap::OrderMap<String, Freq>) -> Result<(), std::io::Error> {
+  serde_json::to_writer_pretty(w, &words)?;
+  Ok(())
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ pub struct BpeTrainer<C = u8> {
 }
 
 impl BpeTrainer<u8> {
-  pub fn from_words<I: IntoIterator<Item = (String, Freq)>>(words: I, special_tokens: Vec<String>) -> Self {
+  pub fn from_words<I: IntoIterator<Item = (String, Freq)>>(words: I, special_tokens: &[String]) -> Self {
     let vocab_start_idx = special_tokens.len() as Idx;
     let mut tokens = Vec::new();
     for (w, freq) in words {
@@ -34,7 +34,7 @@ impl BpeTrainer<u8> {
     bpe
   }
 
-  pub fn _vocab_insert_special_tokens(&mut self, special_tokens: Vec<String>) -> Idx {
+  pub fn _vocab_insert_special_tokens(&mut self, special_tokens: &[String]) -> Idx {
     let length = special_tokens.len();
     let start_idx = self.start_vocab_idx.fetch_add(length as u64, std::sync::atomic::Ordering::AcqRel) as Idx;
     let vocab = &mut self.vocab;
@@ -254,7 +254,7 @@ mod tests {
       ("ababc".to_string(), 5),
       ("ababcbabc".to_string(), 30),
       ("abcbabcab".to_string(), 200),
-    ], vec![]);
+    ], &vec![]);
     bpe.init_training();
     for _ in 0..3 {
       bpe.step();
@@ -288,7 +288,7 @@ mod tests {
     const NAME: &str = "tinystories_sample_5M";
     let input = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
-    let mut bpe = BpeTrainer::from_words(words, vec!["<|endoftext|>".to_string()]);
+    let mut bpe = BpeTrainer::from_words(words, &vec!["<|endoftext|>".to_string()]);
     bpe.init_training();
     while bpe.vocab.len() < 2000 {
       bpe.step().unwrap();
