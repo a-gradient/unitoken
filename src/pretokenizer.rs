@@ -76,8 +76,40 @@ pub fn find_chunk_boundaries<P: AsRef<Path>>(
   Ok(deduplicated_boundaries)
 }
 
+pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Vec<String>) -> MyResult<Vec<(&'a str, bool)>> {
+  if special_tokens.is_empty() {
+    return Ok(vec![(text, false)]);
+  }
+
+  let pattern = special_tokens
+    .iter()
+    .map(|s| fancy_regex::escape(s).into_owned())
+    .collect::<Vec<String>>()
+    .join("|");
+  let re = Regex::new(&pattern).unwrap();
+
+  let mut parts = Vec::new();
+  let mut last_pos = 0;
+  for mat in re.find_iter(text) {
+    match mat {
+      Ok(m) => {
+        if m.start() > last_pos {
+          parts.push((&text[last_pos..m.start()], false));
+        }
+        parts.push((&text[m.start()..m.end()], true));
+        last_pos = m.end();
+      }
+      Err(e) => return Err(MyError::Regex(e)),
+    }
+  }
+  if last_pos < text.len() {
+    parts.push((&text[last_pos..], false));
+  }
+  Ok(parts)
+}
+
 pub fn get_words_from_file<P: AsRef<Path>>(
-  path: P, split_special_token: Option<&str>,
+  path: P, special_tokens: &Vec<String>, split_special_token: Option<&str>,
 ) -> MyResult<BTreeMap<String, Freq>> {
   let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
   let file_size = path.as_ref().metadata()?.len();
@@ -93,9 +125,15 @@ pub fn get_words_from_file<P: AsRef<Path>>(
     file.read_exact(&mut buffer)?;
 
     let content = String::from_utf8_lossy(&buffer);
-    let tokens = pretokenizer(&content, &RE)?;
-    for (token, count) in tokens {
-      *words.entry(token).or_default() += count;
+    let parts = split_special_tokens(&content, &special_tokens)?;
+    for (part, is_special) in parts {
+      if is_special {
+        *words.entry(part.to_string()).or_default() += 1;
+      } else {
+        for (token, count) in pretokenizer(part, &RE)? {
+          *words.entry(token).or_default() += count;
+        }
+      }
     }
   }
   Ok(words)
@@ -167,7 +205,7 @@ mod tests {
   #[test]
   fn test_get_words_from_file() {
     let path = std::path::Path::new("fixtures/tinystories_sample_5M.txt");
-    let words = get_words_from_file(path, Some("<|endoftext|>")).unwrap();
+    let words = get_words_from_file(path, &vec!["<|endoftext|>".to_string()], Some("<|endoftext|>")).unwrap();
     assert_eq!(words.get(" the").cloned().unwrap_or(0), 48886);
   }
 }
