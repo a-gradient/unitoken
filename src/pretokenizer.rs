@@ -5,9 +5,10 @@ use std::{
   collections::BTreeMap,
   fs::{self, File},
   io::{Read as _, Seek},
+  path::Path,
 };
 
-use crate::Error;
+use crate::{Error, bpe::Freq};
 
 lazy_static! {
   /// PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -34,8 +35,14 @@ pub fn pretokenizer(s: &str, pat: &Regex) -> Result<BTreeMap<String, u64>, Error
   Ok(result)
 }
 
-pub fn find_chunk_boundaries(path: &std::path::Path, desired_num_chunks: u32, split_special_token: &str) -> Vec<u64> {
-  let file_size = fs::metadata(path).unwrap().len();
+pub fn find_chunk_boundaries<P: AsRef<Path>>(
+  path: P, desired_num_chunks: u32, split_special_token: &str,
+) -> Result<Vec<u64>, Error> {
+  let metadata = fs::metadata(&path).map_err(|e| Error {
+    msg: format!("Failed to get metadata for file {}: {}", path.as_ref().display(), e),
+    loc: (file!(), line!()),
+  })?;
+  let file_size = metadata.len();
   let chunk_size = file_size / desired_num_chunks as u64;
   let mini_chunk_size = 4096;
   let finder = memmem::Finder::new(split_special_token);
@@ -46,13 +53,24 @@ pub fn find_chunk_boundaries(path: &std::path::Path, desired_num_chunks: u32, sp
   }
   boundaries.push(file_size);
 
-  let mut file = File::open(path).unwrap();
+  let mut file = File::open(&path).map_err(|e| Error {
+    msg: format!("Failed to open file {}: {}", path.as_ref().display(), e),
+    loc: (file!(), line!()),
+  })?;
   for bi in 1..boundaries.len() - 1 {
     let mut initial_position = boundaries[bi];
-    file.seek(std::io::SeekFrom::Start(initial_position)).unwrap();
+    let _ = file
+      .seek(std::io::SeekFrom::Start(initial_position))
+      .map_err(|e| Error {
+        msg: format!("Failed to seek file {}: {}", path.as_ref().display(), e),
+        loc: (file!(), line!()),
+      })?;
     loop {
       let mut buffer = vec![0; mini_chunk_size as usize];
-      let bytes_read = file.read(&mut buffer).unwrap();
+      let bytes_read = file.read(&mut buffer).map_err(|e| Error {
+        msg: format!("Failed to read file {}: {}", path.as_ref().display(), e),
+        loc: (file!(), line!()),
+      })?;
       if bytes_read < mini_chunk_size as usize {
         boundaries[bi] = file_size;
         break;
@@ -73,8 +91,10 @@ pub fn find_chunk_boundaries(path: &std::path::Path, desired_num_chunks: u32, sp
     .cloned()
     .collect::<Vec<u64>>();
   deduplicated_boundaries.sort();
-  deduplicated_boundaries
+  Ok(deduplicated_boundaries)
 }
+
+
 
 #[cfg(test)]
 mod tests {
@@ -127,12 +147,12 @@ mod tests {
     let path = std::path::Path::new("fixtures/tinystories_sample_5M.txt");
 
     let desired_num_chunks = 4;
-    let boundaries = find_chunk_boundaries(path, desired_num_chunks, "<|endoftext|>");
+    let boundaries = find_chunk_boundaries(path, desired_num_chunks, "<|endoftext|>").unwrap();
     let expect = vec![0, 1310951, 2621933, 3932548, 5242880];
     assert!(boundaries == expect, "{:?} != {:?}", boundaries, expect);
 
     let desired_num_chunks = 10;
-    let boundaries = find_chunk_boundaries(path, desired_num_chunks, "<|endoftext|>");
+    let boundaries = find_chunk_boundaries(path, desired_num_chunks, "<|endoftext|>").unwrap();
     let expect = vec![
       0, 525166, 1048920, 1573438, 2097691, 2621933, 3146237, 3670035, 4196392, 4718956, 5242880,
     ];
