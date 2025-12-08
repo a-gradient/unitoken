@@ -1,4 +1,4 @@
-use clap::{Parser, arg};
+use clap::{Parser, Subcommand};
 use std::{
   collections::BTreeMap, fs, path::{Path, PathBuf}
 };
@@ -11,6 +11,18 @@ use unitoken::{
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
+  #[command(subcommand)]
+  command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+  Train(TrainArgs),
+  Encode(EncodeArgs),
+}
+
+#[derive(Parser)]
+struct TrainArgs {
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
   #[arg(short = 'c', long = "chunks", default_value = "1024")]
@@ -19,6 +31,14 @@ struct Cli {
   out_dir: PathBuf,
   #[arg(short='s', long, default_value = "10000")]
   vocab_size: u32,
+  #[arg(value_parser = clap::value_parser!(PathBuf))]
+  input_file: PathBuf,
+}
+
+#[derive(Parser)]
+struct EncodeArgs {
+  #[arg(short, long = "out", default_value = "out")]
+  out_dir: PathBuf,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
   input_file: PathBuf,
 }
@@ -77,20 +97,30 @@ fn lines_of(s: &str) -> Vec<String> {
   s.lines().filter(|line| !line.is_empty()).map(|line| line.to_string()).collect()
 }
 
-fn main() {
-  let cli = Cli::parse();
-  let special_tokens: Vec<String> = match &cli.special_tokens_path {
-    Some(path) => {
-      let content = fs::read_to_string(path).expect("Failed to read special tokens file");
-      lines_of(&content)
-    }
-    None => lines_of(include_str!("../fixtures/default_special_tokens.txt")),
+fn run_train(args: TrainArgs) {
+  let special_tokens = if let Some(special_tokens_path) = args.special_tokens_path {
+    let content = fs::read_to_string(special_tokens_path).expect("Failed to read special tokens file");
+    lines_of(&content)
+  } else {
+    vec![]
   };
   train_bpe(
-    &cli.input_file,
-    cli.vocab_size,
-    cli.num_chunks,
+    args.input_file,
+    args.vocab_size,
+    args.num_chunks,
     &special_tokens,
-    &cli.out_dir,
+    &args.out_dir,
   );
+}
+
+fn main() {
+  let cli = Cli::parse();
+  match cli.command {
+    Commands::Train(train_args) => {
+      run_train(train_args);
+    }
+    Commands::Encode(_encode_args) => {
+      unimplemented!("Encode command is not implemented yet");
+    }
+  }
 }
