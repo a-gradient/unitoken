@@ -16,6 +16,9 @@ impl BpeTrainer<u8> {
     let vocab_start_idx = special_tokens.len() as Idx;
     let mut tokens = Vec::new();
     for (w, freq) in words {
+      if special_tokens.contains(&w) {
+        continue;
+      }
       let idxs = w.bytes().map(|b| b as Idx + vocab_start_idx).collect::<Vec<_>>();
       let pre_token = PreToken {
         src: w.to_word(),
@@ -285,9 +288,9 @@ mod tests {
     const NAME: &str = "tinystories_sample_5M";
     let input = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
-    let mut bpe = BpeTrainer::from_words(words, vec![]);
+    let mut bpe = BpeTrainer::from_words(words, vec!["<|endoftext|>".to_string()]);
     bpe.init_training();
-    while bpe.vocab.len() < 1999 {
+    while bpe.vocab.len() < 2000 {
       bpe.step().unwrap();
       // let m = &bpe.merges.last().unwrap();
       // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);
@@ -295,5 +298,9 @@ mod tests {
     std::fs::create_dir_all("out").ok();
     bpe.save_vocab_json(std::fs::File::create(format!("out/vocab.{NAME}.json")).unwrap()).unwrap();
     bpe.save_merges_txt(std::fs::File::create(format!("out/merges.{NAME}.txt")).unwrap()).unwrap();
+
+    let merges_txt = std::fs::read_to_string(format!("out/merges.{NAME}.txt")).unwrap();
+    let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.txt")).unwrap();
+    assert_eq!(merges_txt, merges_expect_txt);
   }
 }
