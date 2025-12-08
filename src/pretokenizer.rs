@@ -109,7 +109,9 @@ pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Vec<String>) -> 
   Ok(parts)
 }
 
-pub fn get_words_from_segment<P: AsRef<Path>>(path: P, special_tokens: &Vec<String>, offset: u64, len: usize) -> MyResult<BTreeMap<String, Freq>> {
+pub fn get_words_from_segment<P: AsRef<Path>>(
+  path: P, special_tokens: &Vec<String>, offset: u64, len: usize,
+) -> MyResult<BTreeMap<String, Freq>> {
   let mut file = File::open(&path)?;
   file.seek(std::io::SeekFrom::Start(offset))?;
   let mut buffer = vec![0; len];
@@ -131,22 +133,28 @@ pub fn get_words_from_segment<P: AsRef<Path>>(path: P, special_tokens: &Vec<Stri
 }
 
 pub fn get_words_from_file<P: AsRef<Path>>(
-  path: P, special_tokens: &Vec<String>, split_special_token: Option<&str>,
+  path: P, num_chunks: u32, special_tokens: &Vec<String>, split_special_token: Option<&str>,
 ) -> MyResult<BTreeMap<String, Freq>> {
   let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
-  let file_size = path.as_ref().metadata()?.len();
-  let max_content_size = 256 * 1024 * 1024; // 256 MB
-  let num_chunks = (file_size as f64 / max_content_size as f64).ceil();
-
-  let boundaries = find_chunk_boundaries(&path, num_chunks as u32, split_special_token)?;
+  let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
   let path = path.as_ref().to_path_buf();
-  let params = boundaries.iter().zip(boundaries.iter().skip(1)).map(|(start, end)| (*start, (*end - *start) as usize)).collect::<Vec<_>>();
-  let words = params.into_par_iter().map(|(offset, len)|{
-    get_words_from_segment(&path, special_tokens, offset, len)
-  }).try_reduce(|| BTreeMap::new(), |mut a, mut b| {
-    a.append(&mut b);
-    Ok(a)
-  })?;
+  let params = boundaries
+    .iter()
+    .zip(boundaries.iter().skip(1))
+    .map(|(start, end)| (*start, (*end - *start) as usize))
+    .collect::<Vec<_>>();
+  let words = params
+    .into_par_iter()
+    .map(|(offset, len)| get_words_from_segment(&path, special_tokens, offset, len))
+    .try_reduce(
+      || BTreeMap::new(),
+      |mut a, b| {
+        for (k, v) in b.into_iter() {
+          *a.entry(k).or_default() += v;
+        }
+        Ok(a)
+      },
+    )?;
   Ok(words)
 }
 
@@ -216,7 +224,14 @@ mod tests {
   #[test]
   fn test_get_words_from_file() {
     let path = std::path::Path::new("fixtures/tinystories_sample_5M.txt");
-    let words = get_words_from_file(path, &vec!["<|endoftext|>".to_string()], Some("<|endoftext|>")).unwrap();
+    let num_chunks = 16;
+    let words = get_words_from_file(
+      path,
+      num_chunks,
+      &vec!["<|endoftext|>".to_string()],
+      Some("<|endoftext|>"),
+    )
+    .unwrap();
     assert_eq!(words.get(" the").cloned().unwrap_or(0), 48886);
   }
 }
