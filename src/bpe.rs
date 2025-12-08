@@ -3,7 +3,7 @@ use std::{collections::{BTreeMap, BTreeSet, btree_map}, fmt::Debug, sync::{Arc, 
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
 
-use crate::MyResult;
+use crate::{MyError, MyResult};
 
 pub type Idx = u32;
 pub type Word<C> = Arc<[C]>;
@@ -254,6 +254,52 @@ pub struct BpeEncoder<C = u8> {
   pub pre_merge_map: BTreeMap<(Idx, Idx), Merge<C, Idx>>,
 }
 
+impl BpeEncoder<u8> {
+  fn _load_vocab<R: std::io::Read>(reader: R) -> MyResult<BTreeMap<Word<u8>, Idx>> {
+    let input: BTreeMap<String, u64> = serde_json::from_reader(reader)?;
+    input.into_iter().map(|(s, i)| {
+      let w = _from_printable(&s).map_err(|e| MyError::InvalidPrintableChar(e))?;
+      Ok((w, i as Idx))
+    }).collect()
+  }
+
+  fn _load_merges<R: std::io::Read>(mut reader: R, vocab: &BTreeMap<Word<u8>, Idx>) -> MyResult<Vec<Merge<u8, Idx>>> {
+    let mut result = Vec::new();
+    let mut input = String::new();
+    reader.read_to_string(&mut input)?;
+    fn get_kv(vocab: &BTreeMap<Word<u8>, Idx>, s: &str) -> MyResult<(Idx, Word<u8>)> {
+      let w = _from_printable(s).map_err(|e| MyError::InvalidPrintableChar(e))?;
+      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(w.display()))?, w))
+    }
+    for (i, line) in input.lines().enumerate() {
+      if line.trim().is_empty() {
+        continue;
+      }
+      let mut main = line;
+      let mut freq = 0;
+      if line.contains(" => ") {
+        let split = line.rsplitn(2, " => ").collect::<Vec<_>>();
+        main = split.last().unwrap();
+        if split.len() > 1 {
+          freq = split[0].trim().parse().unwrap_or_default();
+        }
+      }
+      let parts = main.trim().split_whitespace().collect::<Vec<_>>();
+      if parts.len() != 2 {
+        return Err(MyError::MergeTxt("main parts is not 2", i))
+      }
+      let (a_idx, a) = get_kv(vocab, parts[0])?;
+      let (b_idx, b) = get_kv(vocab, parts[1])?;
+      let merged = format!("{}{}", parts[0], parts[1]);
+      let (m_idx, _) = get_kv(vocab, &merged)?;
+      let mut merge = Merge::new((a_idx, b_idx), (a, b)).with_target(m_idx);
+      merge.data.freq = freq;
+      result.push(merge);
+    }
+    Ok(result)
+  }
+}
+
 impl<C: Ord + Clone> BpeEncoder<C>
 where
   Word<C>: WordExt
@@ -295,7 +341,7 @@ where
     Ok(PreToken { src: word, idxs, freq })
   }
 
-  pub fn encode(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
+  pub fn encode_words(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
     let mut  words = input
       .iter()
       .map(|w| self._pretoken(w.clone(), 1))
@@ -386,12 +432,27 @@ lazy_static! {
     }
     map
   };
+  static ref PRINTABLE_REV: BTreeMap<char, u8> = {
+    let mut map = BTreeMap::new();
+    for (b, ch) in PRINTABLE.iter() {
+      map.insert(*ch, *b);
+    }
+    map
+  };
 }
 
 fn _printable(w: &Word<u8>) -> String {
   w.iter()
     .map(|b| PRINTABLE.get(b).copied().unwrap_or('.'))
     .collect()
+}
+
+fn _from_printable(s: &str) -> Result<Word<u8>, char> {
+  let bytes = s
+    .chars()
+    .map(|ch| PRINTABLE_REV.get(&ch).copied().ok_or(ch))
+    .collect::<Result<Vec<_>, _>>()?;
+  Ok(Arc::from(bytes.into_boxed_slice()))
 }
 
 fn _merge<C, I>(words: &mut Vec<PreToken<C, I>>, merge: &Merge<C, I>, target_idx: I) -> BTreeMap<(I, I), MergeData>
@@ -648,5 +709,19 @@ mod tests {
     std::fs::create_dir_all("out").ok();
     bpe.save_vocab_json(std::fs::File::create(format!("out/vocab.{NAME}.json")).unwrap()).unwrap();
     bpe.save_merges_txt(std::fs::File::create(format!("out/merges.{NAME}.txt")).unwrap()).unwrap();
+  }
+
+  #[test]
+  fn test_bpe_encode_words() {
+    const NAME: &str = "tinystories_sample_5M";
+    let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap()).unwrap();
+    let input = input.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<_>>();
+    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{NAME}.json")).unwrap()).unwrap();
+    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{NAME}.txt")).unwrap(), &vocab).unwrap();
+    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
+    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    let bpe = BpeEncoder::new(vocab, merges);
+    let result = bpe.encode_words(&input).unwrap();
+    assert_eq!(result.len(), input.len());
   }
 }
