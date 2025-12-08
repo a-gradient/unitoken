@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, BTreeSet}, fmt::Debug, sync::{Arc, atomic::AtomicU64}};
+use std::{collections::{BTreeMap, BTreeSet, btree_map}, fmt::Debug, sync::{Arc, atomic::AtomicU64}};
 
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
@@ -177,7 +177,7 @@ where
     }
   }
 
-  fn init_training(&mut self) {
+  pub fn init_training(&mut self) {
     self.pre_merges.clear();
     for (i, word) in self.words.iter().enumerate() {
       for (j1, j2) in word.idxs.iter().copied().zip(word.idxs.iter().skip(1).copied()) {
@@ -202,12 +202,12 @@ where
     self.start_vocab_idx.fetch_add(1, std::sync::atomic::Ordering::AcqRel) as Idx
   }
 
-  fn merge(&mut self, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
+  fn _merge(words: &mut Vec<PreToken<C, Idx>>, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
     // all tp with target_idx MUST be positive, so that occurs_in should be added.
     // while tp without target_idx MUST be negative, and occurs_in should be removed.
     let mut changes = BTreeMap::<(Idx, Idx), MergeData>::new();
     for k in merge.data.occurs_in.iter().copied() {
-      let w = &mut self.words[k as usize];
+      let w = &mut words[k as usize];
       // local freq tracks the frequency changes within this word.
       let mut local_freq = BTreeMap::<(Idx, Idx), Freq>::new();
       let w_idx = &w.idxs;
@@ -269,22 +269,7 @@ where
     changes
   }
 
-  fn step(&mut self) -> Option<Idx> where C: Ord {
-    // find the most frequent merge,
-    // if the frequency is the same, choose the lexicographically largest one.
-    let Some(merge) = self
-      .pre_merges
-      .values()
-      .max_by_key(|m| (m.data.freq, m.content.clone()))
-      .cloned() else {
-      return None;
-    };
-    let target_idx = self._add_vocab_idx();
-    let changes = self.merge(&merge, target_idx);
-    // println!("Merge {:?} (freq={}) into idx {}", merge.tp, merge.data.freq, target_idx);
-    let merge = merge.with_target(target_idx);
-    let merged_word = merge.merged_content();
-    self.vocab.insert(target_idx, merged_word);
+  fn _update_merge_map(merge_map: &mut BTreeMap<(Idx, Idx), Merge<C, Idx>>, merge: &Merge<C, Idx>, changes: BTreeMap<(Idx, Idx), MergeData>, vocab: Option<&BTreeMap<Idx, Word<C>>>) {
     for (tp, data) in changes {
       if tp == merge.tp {
         assert_eq!(-data.freq, merge.data.freq);
@@ -293,13 +278,21 @@ where
       if data.freq == 0 {
         continue;
       }
-      let entry = self.pre_merges.entry(tp).or_insert_with(|| {
-        let content = (
-          self.vocab.get(&tp.0).unwrap().clone(),
-          self.vocab.get(&tp.1).unwrap().clone(),
-        );
-        Merge::new(tp, content)
-      });
+      let entry = merge_map.entry(tp);
+      let entry = match entry {
+        btree_map::Entry::Occupied(e) => e.into_mut(),
+        btree_map::Entry::Vacant(e) => {
+          if let Some(vocab) = vocab {
+            let content = (
+              vocab.get(&tp.0).unwrap().clone(),
+              vocab.get(&tp.1).unwrap().clone(),
+            );
+            e.insert(Merge::new(tp, content))
+          } else {
+            continue;
+          }
+        }
+      };
       // println!("  Change {:?} {:?} {:?}: freq {} -> {}", tp, entry.content.0.display(), entry.content.1.display(), entry.data.freq, entry.data.freq + data.freq);
       entry.data.freq += data.freq;
       if data.freq > 0 {
@@ -310,6 +303,35 @@ where
         });
       }
     }
+  }
+
+  fn update_pre_merges(&mut self, merge: &Merge<C, Idx>, changes: BTreeMap<(Idx, Idx), MergeData>) {
+    Self::_update_merge_map(&mut self.pre_merges, merge, changes, Some(&self.vocab));
+  }
+
+  fn merge(&mut self, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
+    Self::_merge(&mut self.words, merge, target_idx)
+  }
+
+  fn _get_largest_merge(&self) -> Option<Merge<C, Idx>> where C: Ord {
+    self
+      .pre_merges
+      .values()
+      .max_by_key(|m| (m.data.freq, m.content.clone()))
+      .cloned()
+  }
+
+  pub fn step(&mut self) -> Option<Idx> where C: Ord {
+    // find the most frequent merge,
+    // if the frequency is the same, choose the lexicographically largest one.
+    let merge = self._get_largest_merge()?;
+    let target_idx = self._add_vocab_idx();
+    let changes = self.merge(&merge, target_idx);
+    // println!("Merge {:?} (freq={}) into idx {}", merge.tp, merge.data.freq, target_idx);
+    let merge = merge.with_target(target_idx);
+    let merged_word = merge.merged_content();
+    self.vocab.insert(target_idx, merged_word);
+    self.update_pre_merges(&merge, changes);
     self.pre_merges.remove(&merge.tp);
     self.merges.push(merge);
     Some(target_idx)
