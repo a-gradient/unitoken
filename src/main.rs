@@ -1,7 +1,6 @@
 use clap::{Parser, arg};
 use std::{
-  fs,
-  path::{Path, PathBuf},
+  collections::BTreeMap, fs, path::{Path, PathBuf}
 };
 
 use unitoken::{
@@ -24,9 +23,25 @@ struct Cli {
   input_file: PathBuf,
 }
 
+fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chunks: u32, special_tokens: Vec<String>) -> BTreeMap<String, i64> {
+  if output.as_ref().exists() {
+    let result = serde_json::from_reader(fs::File::open(output).expect("open _words file")).expect("read _words file");
+    return result;
+  }
+  let split_special_token = special_tokens.get(0).cloned();
+
+  let words = get_words_from_file(&input, num_chunks, special_tokens, split_special_token.as_deref()).unwrap();
+
+  let words_file = fs::File::create(output).unwrap();
+  save_words(words_file, &sort_words(&words)).unwrap();
+  words
+}
+
 fn train_bpe<P: AsRef<Path>>(
   path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf,
 ) {
+  fs::create_dir_all(out_dir).expect("Failed to create output directory");
+
   let file_stem = path
     .as_ref()
     .file_stem()
@@ -34,9 +49,13 @@ fn train_bpe<P: AsRef<Path>>(
     .to_str()
     .expect("Failed to convert file stem to str");
   // use first special_token as split_special_token
-  let split_special_token = special_tokens.get(0).map(String::as_str);
-  let words = get_words_from_file(&path, num_chunks, special_tokens, split_special_token).unwrap();
-  let words_sorted = sort_words(&words);
+
+  let words = _pretokenize(
+    out_dir.join(format!("_words.{file_stem}.json")),
+    &path,
+    num_chunks,
+    special_tokens.clone(),
+  );
 
   let mut bpe = BpeTrainer::from_words(words, special_tokens);
   let start_vocab_idx = bpe.start_vocab_idx.load(std::sync::atomic::Ordering::Acquire) as usize;
@@ -45,19 +64,13 @@ fn train_bpe<P: AsRef<Path>>(
     bpe.step();
   }
 
-  fs::create_dir_all(out_dir).expect("Failed to create output directory");
   let vocab_filename = format!("vocab.{file_stem}.json");
   let merges_filename = format!("merges.{file_stem}.txt");
-  let words_filename = format!("_words.{file_stem}.json");
-  let mut open_options = fs::OpenOptions::new();
-  open_options.write(true).create(true).truncate(true);
-  let vocab_file = open_options.open(out_dir.join(vocab_filename)).unwrap();
-  let merges_file = open_options.open(out_dir.join(merges_filename)).unwrap();
-  let words_file = open_options.open(out_dir.join(words_filename)).unwrap();
+  let vocab_file = fs::File::create(out_dir.join(vocab_filename)).unwrap();
+  let merges_file = fs::File::create(out_dir.join(merges_filename)).unwrap();
 
-  bpe.save_vocab_json(&vocab_file).unwrap();
+  bpe.save_vocab_json(vocab_file).unwrap();
   bpe.save_merges_txt(merges_file).unwrap();
-  save_words(words_file, &words_sorted).unwrap();
 }
 
 fn lines_of(s: &str) -> Vec<String> {

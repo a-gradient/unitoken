@@ -129,7 +129,7 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
 }
 
 pub fn get_words_from_file<P: AsRef<Path>>(
-  path: P, num_chunks: u32, special_tokens: &Vec<String>, split_special_token: Option<&str>,
+  path: P, num_chunks: u32, special_tokens: Vec<String>, split_special_token: Option<&str>,
 ) -> MyResult<BTreeMap<String, Freq>> {
   let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
   let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
@@ -141,7 +141,7 @@ pub fn get_words_from_file<P: AsRef<Path>>(
     .collect::<Vec<_>>();
   let words = params
     .into_par_iter()
-    .map(|(offset, len)| get_words_from_segment(&path, special_tokens, offset, len))
+    .map(|(offset, len)| get_words_from_segment(&path, &special_tokens, offset, len))
     .try_reduce(
       || BTreeMap::new(),
       |mut a, b| {
@@ -237,7 +237,7 @@ mod tests {
     let words = get_words_from_file(
       path,
       num_chunks,
-      &vec!["<|endoftext|>".to_string()],
+      vec!["<|endoftext|>".to_string()],
       Some("<|endoftext|>"),
     )
     .unwrap();
