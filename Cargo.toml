@@ -12,3 +12,4 @@ serde_json = "1.0.145"
 thiserror = "2.0.17"
 rayon = "1.11.0"
 clap = { version = "4.5.53", features = ["derive"] }
+moka = { version = "0.12.11", features = ["sync"] }

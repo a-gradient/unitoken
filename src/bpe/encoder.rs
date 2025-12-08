@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use moka::sync::Cache;
+
 use crate::{MyError, MyResult};
 
 use super::*;
@@ -12,6 +14,7 @@ pub struct BpeEncoder<C = u8> {
   /// with freq represents rank, or `merge.data.freq=-i` for i-th merge.
   /// with [`occurs_in={0}`](MergeData::occurs_in), in order to handle first word in [`Self::_encode_word`].
   pub pre_merge_map: BTreeMap<(Idx, Idx), Merge<C, Idx>>,
+  pub cache: Cache<Word<C>, Word<Idx>>,
 }
 
 impl BpeEncoder<u8> {
@@ -60,7 +63,7 @@ impl BpeEncoder<u8> {
   }
 }
 
-impl<C: Ord + Clone> BpeEncoder<C>
+impl<C: Ord + Clone + Cachable> BpeEncoder<C>
 where
   Word<C>: WordExt
 {
@@ -87,12 +90,14 @@ where
       merge.add(0, -(i as Freq));
       (tp, merge)
     }).collect::<BTreeMap<_, _>>();
+    let max_cap = vocab.len() as u64 * 3 / 2;
     Self {
       vocab_bytes,
       vocab_rev,
       vocab,
       merges,
       pre_merge_map,
+      cache: Cache::new(max_cap),
     }
   }
 
@@ -114,7 +119,9 @@ where
   ///
   /// this method would be useful if you would like to build cache,
   /// or have large number of words to be encode at one time.
-  pub fn encode_words(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
+  ///
+  /// See [`Self::encode_words`] for cached version
+  pub fn _encode_words(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
     let mut words = input
       .iter()
       .map(|w| self._pretoken(w.clone(), 1))
@@ -143,7 +150,30 @@ where
     Ok(words.into_iter().map(|i| i.idxs.to_word()).collect())
   }
 
-  /// encode a single word without cache
+  pub fn encode_words(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
+    let mut results = BTreeMap::new();
+    let mut to_encode = Vec::new();
+    let mut query = Vec::new();
+    input.iter().enumerate().for_each(|(i, w)| {
+      if let Some(cached) = self.cache.get(w) {
+        results.insert(i, cached);
+      } else {
+        to_encode.push(w.clone());
+        query.push(i);
+      }
+    });
+    let encoded = self._encode_words(&to_encode)?;
+    for (i, (w, e)) in query.into_iter().zip(to_encode.into_iter().zip(encoded.into_iter())) {
+      self.cache.insert(w.clone(), e.clone());
+      results.insert(i, e);
+    }
+    let final_results = results.values().cloned().collect::<Vec<_>>();
+    assert_eq!(final_results.len(), input.len());
+    Ok(final_results)
+  }
+
+  /// encode a single word without cache.
+  /// see [`Self::encode_word`] for cached version.
   pub fn _encode_word(&self, input: &Word<C>) -> MyResult<Word<Idx>> {
     let mut queue = BTreeMap::new();
     let mut words = vec![self._pretoken(input.clone(), 1)?];
@@ -171,6 +201,15 @@ where
     }
     Ok(words.into_iter().next().unwrap().idxs.to_word())
   }
+
+  pub fn encode_word(&self, input: &Word<C>) -> MyResult<Word<Idx>> {
+    if let Some(result) = self.cache.get(input) {
+      return Ok(result);
+    }
+    let result = self._encode_word(input)?;
+    self.cache.insert(input.clone(), result.clone());
+    Ok(result)
+  }
 }
 
 #[cfg(test)]
@@ -187,7 +226,7 @@ mod tests {
     let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
     let bpe = BpeEncoder::new(vocab, merges);
-    let result = bpe.encode_words(&input).unwrap();
+    let result = bpe._encode_words(&input).unwrap();
     assert_eq!(result.len(), input.len());
 
     let result2 = input.iter().map(|w| bpe._encode_word(w).unwrap()).collect::<Vec<_>>();

@@ -145,7 +145,7 @@ where
     Some(target_idx)
   }
 
-  pub fn finish(self) -> BpeEncoder<C> where C: Ord {
+  pub fn finish(self) -> BpeEncoder<C> where C: Ord + Cachable {
     let merges = self.merges
       .into_iter()
       .map(|m| (m.tp, m.target.unwrap()))

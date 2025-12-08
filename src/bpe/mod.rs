@@ -112,3 +112,6 @@ impl<C, I> Merge<C, I> {
     self.data.occurs_in.remove(doc_id);
   }
 }
+
+pub trait Cachable: std::hash::Hash + Send + Sync + 'static { }
+impl<C: std::hash::Hash + Send + Sync + 'static> Cachable for C { }
