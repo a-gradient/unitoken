@@ -8,7 +8,7 @@ use std::{
   path::Path,
 };
 
-use crate::{Error, bpe::Freq};
+use crate::{MyError, MyResult, bpe::Freq};
 
 lazy_static! {
   /// PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -16,7 +16,7 @@ lazy_static! {
 }
 
 /// input a string and a pattern, return a map of tokens and their counts
-pub fn pretokenizer(s: &str, pat: &Regex) -> Result<BTreeMap<String, u64>, Error> {
+pub fn pretokenizer(s: &str, pat: &Regex) -> MyResult<BTreeMap<String, Freq>> {
   let mut result = BTreeMap::new();
   for i in pat.find_iter(s) {
     match i {
@@ -25,10 +25,7 @@ pub fn pretokenizer(s: &str, pat: &Regex) -> Result<BTreeMap<String, u64>, Error
         *result.entry(token).or_default() += 1;
       }
       Err(e) => {
-        return Err(Error {
-          msg: format!("Regex error: {}", e),
-          loc: (file!(), line!()),
-        });
+        return Err(MyError::Regex(e));
       }
     }
   }
@@ -37,12 +34,8 @@ pub fn pretokenizer(s: &str, pat: &Regex) -> Result<BTreeMap<String, u64>, Error
 
 pub fn find_chunk_boundaries<P: AsRef<Path>>(
   path: P, desired_num_chunks: u32, split_special_token: &str,
-) -> Result<Vec<u64>, Error> {
-  let metadata = fs::metadata(&path).map_err(|e| Error {
-    msg: format!("Failed to get metadata for file {}: {}", path.as_ref().display(), e),
-    loc: (file!(), line!()),
-  })?;
-  let file_size = metadata.len();
+) -> MyResult<Vec<u64>> {
+  let file_size = fs::metadata(&path)?.len();
   let chunk_size = file_size / desired_num_chunks as u64;
   let mini_chunk_size = 4096;
   let finder = memmem::Finder::new(split_special_token);
@@ -53,24 +46,13 @@ pub fn find_chunk_boundaries<P: AsRef<Path>>(
   }
   boundaries.push(file_size);
 
-  let mut file = File::open(&path).map_err(|e| Error {
-    msg: format!("Failed to open file {}: {}", path.as_ref().display(), e),
-    loc: (file!(), line!()),
-  })?;
+  let mut file = File::open(&path)?;
   for bi in 1..boundaries.len() - 1 {
     let mut initial_position = boundaries[bi];
-    let _ = file
-      .seek(std::io::SeekFrom::Start(initial_position))
-      .map_err(|e| Error {
-        msg: format!("Failed to seek file {}: {}", path.as_ref().display(), e),
-        loc: (file!(), line!()),
-      })?;
+    let _ = file.seek(std::io::SeekFrom::Start(initial_position))?;
     loop {
       let mut buffer = vec![0; mini_chunk_size as usize];
-      let bytes_read = file.read(&mut buffer).map_err(|e| Error {
-        msg: format!("Failed to read file {}: {}", path.as_ref().display(), e),
-        loc: (file!(), line!()),
-      })?;
+      let bytes_read = file.read(&mut buffer)?;
       if bytes_read < mini_chunk_size as usize {
         boundaries[bi] = file_size;
         break;
@@ -94,7 +76,30 @@ pub fn find_chunk_boundaries<P: AsRef<Path>>(
   Ok(deduplicated_boundaries)
 }
 
+pub fn get_words_from_file<P: AsRef<Path>>(
+  path: P, split_special_token: Option<&str>,
+) -> MyResult<BTreeMap<String, Freq>> {
+  let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
+  let file_size = path.as_ref().metadata()?.len();
+  let max_content_size = 256 * 1024 * 1024; // 256 MB
+  let num_chunks = (file_size as f64 / max_content_size as f64).ceil();
 
+  let boundaries = find_chunk_boundaries(&path, num_chunks as u32, split_special_token)?;
+  let mut words = BTreeMap::new();
+  for (start, end) in boundaries.iter().zip(boundaries.iter().skip(1)) {
+    let mut file = File::open(&path)?;
+    file.seek(std::io::SeekFrom::Start(*start))?;
+    let mut buffer = vec![0; (end - start) as usize];
+    file.read_exact(&mut buffer)?;
+
+    let content = String::from_utf8_lossy(&buffer);
+    let tokens = pretokenizer(&content, &RE)?;
+    for (token, count) in tokens {
+      *words.entry(token).or_default() += count;
+    }
+  }
+  Ok(words)
+}
 
 #[cfg(test)]
 mod tests {
@@ -157,5 +162,12 @@ mod tests {
       0, 525166, 1048920, 1573438, 2097691, 2621933, 3146237, 3670035, 4196392, 4718956, 5242880,
     ];
     assert!(boundaries == expect, "{:?} != {:?}", boundaries, expect);
+  }
+
+  #[test]
+  fn test_get_words_from_file() {
+    let path = std::path::Path::new("fixtures/tinystories_sample_5M.txt");
+    let words = get_words_from_file(path, Some("<|endoftext|>")).unwrap();
+    assert_eq!(words.get(" the").cloned().unwrap_or(0), 48886);
   }
 }

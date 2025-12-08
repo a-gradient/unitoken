@@ -1,8 +1,12 @@
 pub mod bpe;
 pub mod pretokenizer;
 
-#[derive(Debug)]
-pub struct Error {
-  pub msg: String,
-  pub loc: (&'static str, u32),
+#[derive(thiserror::Error, Debug)]
+pub enum MyError {
+  #[error("IO error: {0}")]
+  Io(#[from] std::io::Error),
+  #[error("Regex error: {0}")]
+  Regex(#[from] fancy_regex::Error),
 }
+
+pub type MyResult<T> = Result<T, MyError>;
