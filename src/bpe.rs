@@ -20,6 +20,22 @@ pub struct PreToken<C, I> {
   pub freq: Freq,
 }
 
+impl<C, I> PreToken<C, I> {
+  pub fn display(&self) -> String where Word<C>: WordExt {
+    format!("<{:?} => {}>", self.src.display(), self.freq)
+  }
+
+  pub fn display_split(&self, vocabs: &BTreeMap<I, Word<C>>) -> String where I: Ord, C: Clone, Word<C>: WordExt {
+    let parts = self
+      .idxs
+      .iter()
+      .map(|i| vocabs.get(i).unwrap().display())
+      .collect::<Vec<_>>()
+      .join(" ");
+    format!("<{} => {}>", parts, self.freq)
+  }
+}
+
 #[derive(Debug, Clone)]
 pub struct Merge<C, I> {
   pub tp: (I, I),
@@ -62,6 +78,10 @@ impl MergeData {
       occurs_in: iter.into_iter().collect(),
       freq: self.freq,
     }
+  }
+
+  pub fn occurs_in_vec(&self) -> Vec<u64> {
+    self.occurs_in.iter().copied().collect::<Vec<u64>>()
   }
 }
 
@@ -143,7 +163,10 @@ impl BPE<u8> {
   }
 }
 
-impl<C: Clone> BPE<C> {
+impl<C: Clone> BPE<C>
+where
+  Word<C>: WordExt
+{
   pub fn new(words: Vec<PreToken<C, Idx>>) -> Self {
     Self {
       start_vocab_idx: AtomicU64::new(0),
@@ -183,7 +206,8 @@ impl<C: Clone> BPE<C> {
     // all tp with target_idx MUST be positive, so that occurs_in should be added.
     // while tp without target_idx MUST be negative, and occurs_in should be removed.
     let mut changes = BTreeMap::<(Idx, Idx), MergeData>::new();
-    for (k, w) in self.words.iter_mut().enumerate() {
+    for k in merge.data.occurs_in.iter().copied() {
+      let w = &mut self.words[k as usize];
       // local freq tracks the frequency changes within this word.
       let mut local_freq = BTreeMap::<(Idx, Idx), Freq>::new();
       let w_idx = &w.idxs;
@@ -218,7 +242,8 @@ impl<C: Clone> BPE<C> {
             let new_tp = (target_idx, old_tp.1);
             changes.entry(old_tp).or_default().freq -= w_freq;
             changes.entry(new_tp).or_default().freq += w_freq;
-            *local_freq.entry(old_tp).or_default() -= 1;
+            // old_tp is not increased, so that it should not be decreased
+            *local_freq.entry(old_tp).or_default() -= 0;
             *local_freq.entry(new_tp).or_default() -= 1;
             last_tp = Some(new_tp);
           }
@@ -272,7 +297,7 @@ impl<C: Clone> BPE<C> {
         );
         Merge::new(tp, content)
       });
-      // println!("  Change {:?} {:?}: freq {} -> {}", tp, entry.content, entry.data.freq, entry.data.freq + data.freq);
+      // println!("  Change {:?} {:?} {:?}: freq {} -> {}", tp, entry.content.0.display(), entry.content.1.display(), entry.data.freq, entry.data.freq + data.freq);
       entry.data.freq += data.freq;
       if data.freq > 0 {
         entry.data.occurs_in.extend(data.occurs_in);
@@ -310,6 +335,28 @@ impl ToWord<u8> for &str {
   }
 }
 
+pub trait WordExt {
+  fn display(&self) -> String;
+}
+
+impl WordExt for Word<u8> {
+  fn display(&self) -> String {
+    _printable(self)
+  }
+}
+
+impl WordExt for Word<Character> {
+  fn display(&self) -> String {
+    self
+      .iter()
+      .map(|c| match c {
+        Character::Unicode(ch) => *ch,
+        Character::Byte(b) => PRINTABLE.get(b).copied().unwrap_or('.'),
+      })
+      .collect()
+  }
+}
+
 lazy_static! {
   static ref PRINTABLE: BTreeMap<u8, char> = {
     let mut map = BTreeMap::new();
@@ -335,50 +382,86 @@ fn _printable(w: &Word<u8>) -> String {
 mod tests {
   use super::*;
 
+  fn _test_bpe_merge(pretokens: &[(&str, Freq)], merges: &[((&str, &str), Vec<(&str, &str, MergeData)>)]) {
+    fn pretoken(s: &str, freq: Freq) -> PreToken<u8, Idx> {
+      let idxs = s.bytes().map(|b| b as Idx - 'a' as Idx).collect::<Vec<_>>();
+      PreToken {
+        src: s.to_word(),
+        idxs,
+        freq,
+      }
+    }
+    fn lookup(bpe: &BPE, s: &str) -> Option<Idx> {
+      bpe.vocab.iter().find_map(|(i, w)| {
+        if w.as_ref() == s.as_bytes() {
+          Some(*i)
+        } else {
+          None
+        }
+      })
+    }
+    fn display(bpe: &BPE, changes: &BTreeMap<(u32, u32), MergeData>) -> String {
+      let mut parts = Vec::new();
+      let target = ("__target__").to_word();
+      for (tp, data) in changes.iter() {
+        let left = bpe.vocab.get(&tp.0).unwrap_or(&target).display();
+        let right = bpe.vocab.get(&tp.1).unwrap_or(&target).display();
+        parts.push(format!("({:?}, {:?}, MergeData::new({}).occurs_in({:?}))", left, right, data.freq, data.occurs_in_vec()));
+      }
+      format!("{{\n  {}\n}}", parts.join(",\n  "))
+    }
+
+    let mut bpe = BPE::default();
+    bpe.vocab.extend(
+      ('a' ..= 'z').enumerate().map(|(i, c)| (i as Idx, c.to_string().to_word()))
+    );
+    bpe._set_vocab_idx(100);
+    bpe.words.extend(
+      pretokens.iter().map(|(s, f)| pretoken(s, *f))
+    );
+    bpe.init_training();
+    for (m, expected) in merges {
+      let merge_tp = (
+        lookup(&bpe, m.0).unwrap(), lookup(&bpe, m.1).unwrap()
+      );
+      let merge = bpe.pre_merges.get(&merge_tp).unwrap().clone();
+      let target = bpe._add_vocab_idx();
+      let changes = bpe.merge(&merge, target);
+      assert_eq!(merge.data.freq, -changes.get(&merge_tp).cloned().unwrap().freq);
+      if expected.is_empty() {
+        continue;
+      }
+      let expected = expected.into_iter().map(|(a, b, data)| {
+        let tp_idx = (lookup(&bpe, a).unwrap_or(target), lookup(&bpe, b).unwrap_or(target));
+        (tp_idx, data.clone())
+      }).collect::<BTreeMap<_, _>>();
+      assert_eq!(changes, expected, "\nExpected changes:\n{}\nActual changes:\n{}", display(&bpe, &expected), display(&bpe, &changes));
+    }
+  }
+
   #[test]
   fn test_bpe_merge() {
-    let mut bpe = BPE::default();
-    bpe.vocab.insert(0, "a".to_word());
-    bpe.vocab.insert(1, "b".to_word());
-    bpe.vocab.insert(2, "c".to_word());
-    bpe.vocab.insert(3, "d".to_word());
-    bpe.words.push(PreToken {
-      src: "abcd".to_word(),
-      idxs: vec![0, 1, 2, 3],
-      freq: 5,
-    });
-    bpe.words.push(PreToken {
-      src: "abcdbcd".to_word(),
-      idxs: vec![0, 1, 2, 3, 1, 2, 3],
-      freq: 30,
-    });
-    bpe.words.push(PreToken {
-      src: "abcbcdab".to_word(),
-      idxs: vec![0, 1, 2, 1, 2, 3, 0, 1],
-      freq: 200,
-    });
-    bpe.init_training();
-    let tp = (1, 2); // merging "b" and "c"
-    let target = Idx::MAX;
-    let merge = bpe.pre_merges.get(&tp).unwrap().clone();
-    let changes = bpe.merge(&merge, target);
-    println!("{:?}", changes);
-    let answer = vec![
-      ((0, 1), MergeData::new(-235).occurs_in([0, 1])),
-      ((0, target), MergeData::new(235).occurs_in([0, 1, 2])),
-      ((1, 2), MergeData::new(-465).occurs_in([0, 1, 2])),
-      ((2, 1), MergeData::new(-200).occurs_in([2])),
-      ((2, 3), MergeData::new(-265).occurs_in([0, 1, 2])),
-      ((3, 1), MergeData::new(-30).occurs_in([1])),
-      ((3, target), MergeData::new(30).occurs_in([1])),
-      ((target, 1), MergeData::new(0).occurs_in([2])),
-      ((target, 3), MergeData::new(265).occurs_in([0, 1, 2])),
-      ((target, target), MergeData::new(200).occurs_in([2])),
-    ]
-    .into_iter()
-    .collect::<BTreeMap<_, _>>();
-    assert_eq!(changes, answer);
-    assert_eq!(merge.data.freq, -answer.get(&tp).cloned().unwrap().freq);
+    _test_bpe_merge(&[("abcd", 5), ("abcdbcd", 30), ("abcbcdab", 200)], &[(("b", "c"), vec![
+      ("a", "b", MergeData::new(-235).occurs_in([0, 1])),
+      ("a", "bc", MergeData::new(235).occurs_in([0, 1, 2])),
+      ("b", "c", MergeData::new(-465).occurs_in([0, 1, 2])),
+      ("c", "b", MergeData::new(-200).occurs_in([2])),
+      ("c", "d", MergeData::new(-265).occurs_in([0, 1, 2])),
+      ("d", "b", MergeData::new(-30).occurs_in([1])),
+      ("d", "bc", MergeData::new(30).occurs_in([1])),
+      ("bc", "b", MergeData::new(0).occurs_in([2])),
+      ("bc", "d", MergeData::new(265).occurs_in([0, 1, 2])),
+      ("bc", "bc", MergeData::new(200).occurs_in([2])),
+    ])]);
+
+    _test_bpe_merge(&[("wherever", 10)],
+    &[(("h", "e"), vec![
+      ("e", "r", MergeData::new(-10).occurs_in([])),
+      ("h", "e", MergeData::new(-10).occurs_in([0])),
+      ("w", "h", MergeData::new(-10).occurs_in([0])),
+      ("w", "he", MergeData::new(10).occurs_in([0])),
+      ("he", "r", MergeData::new(10).occurs_in([0])),
+    ])]);
   }
 
   #[test]
@@ -425,6 +508,8 @@ mod tests {
     bpe.init_training();
     while bpe.vocab.len() < 1000 {
       bpe.step().unwrap();
+      // let m = &bpe.merges.last().unwrap();
+      // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);
     }
     std::fs::create_dir_all("out").ok();
     bpe.save_vocab_json(std::fs::File::create(format!("out/vocab.{NAME}.json")).unwrap()).unwrap();
