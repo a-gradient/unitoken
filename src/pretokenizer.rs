@@ -1,6 +1,7 @@
 use fancy_regex::Regex;
 use lazy_static::lazy_static;
 use memchr::memmem;
+use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use std::{
   collections::BTreeMap,
   fs::{self, File},
@@ -108,6 +109,27 @@ pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Vec<String>) -> 
   Ok(parts)
 }
 
+pub fn get_words_from_segment<P: AsRef<Path>>(path: P, special_tokens: &Vec<String>, offset: u64, len: usize) -> MyResult<BTreeMap<String, Freq>> {
+  let mut file = File::open(&path)?;
+  file.seek(std::io::SeekFrom::Start(offset))?;
+  let mut buffer = vec![0; len];
+  file.read_exact(&mut buffer)?;
+
+  let content = String::from_utf8_lossy(&buffer);
+  let parts = split_special_tokens(&content, &special_tokens)?;
+  let mut words = BTreeMap::new();
+  for (part, is_special) in parts {
+    if is_special {
+      *words.entry(part.to_string()).or_default() += 1;
+    } else {
+      for (token, count) in pretokenizer(part, &RE)? {
+        *words.entry(token).or_default() += count;
+      }
+    }
+  }
+  Ok(words)
+}
+
 pub fn get_words_from_file<P: AsRef<Path>>(
   path: P, special_tokens: &Vec<String>, split_special_token: Option<&str>,
 ) -> MyResult<BTreeMap<String, Freq>> {
@@ -117,25 +139,14 @@ pub fn get_words_from_file<P: AsRef<Path>>(
   let num_chunks = (file_size as f64 / max_content_size as f64).ceil();
 
   let boundaries = find_chunk_boundaries(&path, num_chunks as u32, split_special_token)?;
-  let mut words = BTreeMap::new();
-  for (start, end) in boundaries.iter().zip(boundaries.iter().skip(1)) {
-    let mut file = File::open(&path)?;
-    file.seek(std::io::SeekFrom::Start(*start))?;
-    let mut buffer = vec![0; (end - start) as usize];
-    file.read_exact(&mut buffer)?;
-
-    let content = String::from_utf8_lossy(&buffer);
-    let parts = split_special_tokens(&content, &special_tokens)?;
-    for (part, is_special) in parts {
-      if is_special {
-        *words.entry(part.to_string()).or_default() += 1;
-      } else {
-        for (token, count) in pretokenizer(part, &RE)? {
-          *words.entry(token).or_default() += count;
-        }
-      }
-    }
-  }
+  let path = path.as_ref().to_path_buf();
+  let params = boundaries.iter().zip(boundaries.iter().skip(1)).map(|(start, end)| (*start, (*end - *start) as usize)).collect::<Vec<_>>();
+  let words = params.into_par_iter().map(|(offset, len)|{
+    get_words_from_segment(&path, special_tokens, offset, len)
+  }).try_reduce(|| BTreeMap::new(), |mut a, mut b| {
+    a.append(&mut b);
+    Ok(a)
+  })?;
   Ok(words)
 }
 
