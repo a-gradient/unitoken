@@ -219,32 +219,32 @@ mod tests {
   #[test]
   fn test_bpe_merge() {
     _test_bpe_merge(&[("abcd", 5), ("abcdbcd", 30), ("abcbcdab", 200)], &[(("b", "c"), vec![
-      ("a", "b", MergeData::new(-235).occurs_in([0, 1])),
-      ("a", "bc", MergeData::new(235).occurs_in([0, 1, 2])),
-      ("b", "c", MergeData::new(-465).occurs_in([0, 1, 2])),
-      ("c", "b", MergeData::new(-200).occurs_in([2])),
-      ("c", "d", MergeData::new(-265).occurs_in([0, 1, 2])),
-      ("d", "b", MergeData::new(-30).occurs_in([1])),
-      ("d", "bc", MergeData::new(30).occurs_in([1])),
-      ("bc", "b", MergeData::new(0).occurs_in([2])),
-      ("bc", "d", MergeData::new(265).occurs_in([0, 1, 2])),
-      ("bc", "bc", MergeData::new(200).occurs_in([2])),
+      ("a", "b", MergeData::new(-235).add_occurs_in([0, 1])),
+      ("a", "bc", MergeData::new(235).add_occurs_in([0, 1, 2])),
+      ("b", "c", MergeData::new(-465).add_occurs_in([0, 1, 2])),
+      ("c", "b", MergeData::new(-200).add_occurs_in([2])),
+      ("c", "d", MergeData::new(-265).add_occurs_in([0, 1, 2])),
+      ("d", "b", MergeData::new(-30).add_occurs_in([1])),
+      ("d", "bc", MergeData::new(30).add_occurs_in([1])),
+      ("bc", "b", MergeData::new(0).add_occurs_in([2])),
+      ("bc", "d", MergeData::new(265).add_occurs_in([0, 1, 2])),
+      ("bc", "bc", MergeData::new(200).add_occurs_in([2])),
     ])]);
 
     _test_bpe_merge(&[("wherever", 10)],
     &[(("h", "e"), vec![
-      ("e", "r", MergeData::new(-10).occurs_in([])),
-      ("h", "e", MergeData::new(-10).occurs_in([0])),
-      ("w", "h", MergeData::new(-10).occurs_in([0])),
-      ("w", "he", MergeData::new(10).occurs_in([0])),
-      ("he", "r", MergeData::new(10).occurs_in([0])),
+      ("e", "r", MergeData::new(-10).add_occurs_in([])),
+      ("h", "e", MergeData::new(-10).add_occurs_in([0])),
+      ("w", "h", MergeData::new(-10).add_occurs_in([0])),
+      ("w", "he", MergeData::new(10).add_occurs_in([0])),
+      ("he", "r", MergeData::new(10).add_occurs_in([0])),
     ])]);
 
     _test_bpe_merge(&[("aaa", 10), ("aaaa", 1)],
     &[(("a", "a"), vec![
-      ("a", "a", MergeData::new(-23).occurs_in([0, 1])),
-      ("aa", "a", MergeData::new(10).occurs_in([0, 1])),
-      ("aa", "aa", MergeData::new(1).occurs_in([1])),
+      ("a", "a", MergeData::new(-23).add_occurs_in([0, 1])),
+      ("aa", "a", MergeData::new(10).add_occurs_in([0, 1])),
+      ("aa", "aa", MergeData::new(1).add_occurs_in([1])),
     ])]);
   }
 

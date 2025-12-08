@@ -80,7 +80,7 @@ impl MergeData {
   }
 
   #[must_use]
-  pub fn occurs_in<I: IntoIterator<Item = u64>>(self, iter: I) -> Self {
+  pub fn add_occurs_in<I: IntoIterator<Item = u64>>(self, iter: I) -> Self {
     Self {
       occurs_in: iter.into_iter().collect(),
       freq: self.freq,
