@@ -219,6 +219,7 @@ mod tests {
   #[test]
   fn test_bpe_encode_words() {
     const NAME: &str = "tinystories_sample_5M";
+    // const NAME: &str = "TinyStoriesV2-GPT4-train";
     let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap()).unwrap();
     let input = input.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<_>>();
     let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{NAME}.json")).unwrap()).unwrap();

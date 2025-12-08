@@ -230,6 +230,7 @@ mod tests {
   #[test]
   fn test_get_words_from_file() {
     const NAME: &str = "tinystories_sample_5M";
+    // const NAME: &str = "TinyStoriesV2-GPT4-train";
     let path = format!("fixtures/{NAME}.txt");
     let num_chunks = 16;
     let words = get_words_from_file(
@@ -239,7 +240,9 @@ mod tests {
       Some("<|endoftext|>"),
     )
     .unwrap();
-    assert_eq!(words.get(" the").cloned().unwrap_or(0), 48886);
+    if NAME == "tinystories_sample_5M" {
+      assert_eq!(words.get(" the").cloned().unwrap_or(0), 48886);
+    }
     std::fs::create_dir_all("out").ok();
     serde_json::to_writer_pretty(std::fs::File::create(format!("out/{NAME}_words.json")).unwrap(), &words).unwrap();
     let answer = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();

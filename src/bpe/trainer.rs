@@ -286,11 +286,16 @@ mod tests {
   #[test]
   fn test_bpe_from_words() {
     const NAME: &str = "tinystories_sample_5M";
+    // const NAME: &str = "TinyStoriesV2-GPT4-train";
     let input = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
     let mut bpe = BpeTrainer::from_words(words, &vec!["<|endoftext|>".to_string()]);
     bpe.init_training();
-    while bpe.vocab.len() < 2000 {
+    let vocab_size = match NAME {
+      "tinystories_sample_5M" => 2000,
+      _ => 10000,
+    };
+    while bpe.vocab.len() < vocab_size {
       bpe.step().unwrap();
       // let m = &bpe.merges.last().unwrap();
       // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);
