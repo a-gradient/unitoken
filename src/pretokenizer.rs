@@ -13,17 +13,33 @@ use crate::{MyError, MyResult, bpe::Freq};
 
 lazy_static! {
   /// PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-  static ref RE: Regex = Regex::new(r"'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+").unwrap();
+  pub static ref RE: Regex = Regex::new(r"'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+").unwrap();
 }
 
 /// input a string and a pattern, return a map of tokens and their counts
-pub fn pretokenizer(s: &str, pat: &Regex) -> MyResult<BTreeMap<String, Freq>> {
+pub fn pretokenizer_counter(s: &str, pat: &Regex) -> MyResult<BTreeMap<String, Freq>> {
   let mut result = BTreeMap::new();
   for i in pat.find_iter(s) {
     match i {
       Ok(m) => {
         let token = m.as_str().to_string();
         *result.entry(token).or_default() += 1;
+      }
+      Err(e) => {
+        return Err(MyError::Regex(e));
+      }
+    }
+  }
+  Ok(result)
+}
+
+pub fn pretokenizer_tokens(s: &str, pat: &Regex) -> MyResult<Vec<String>> {
+  let mut result = Vec::new();
+  for i in pat.find_iter(s) {
+    match i {
+      Ok(m) => {
+        let token = m.as_str().to_string();
+        result.push(token);
       }
       Err(e) => {
         return Err(MyError::Regex(e));
@@ -125,7 +141,7 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
   let parts = split_special_tokens(&content, &special_tokens)?;
   let mut words = BTreeMap::new();
   for (part, _) in parts.iter().filter(|(_, is_special)| !is_special) {
-    for (token, count) in pretokenizer(part, &RE)? {
+    for (token, count) in pretokenizer_counter(part, &RE)? {
       *words.entry(token).or_default() += count;
     }
   }
@@ -180,7 +196,7 @@ mod tests {
   #[test]
   fn test_pretokenizer() {
     let s = "Hello, world! It's 2024.";
-    let tokens = pretokenizer(s, &RE).unwrap();
+    let tokens = pretokenizer_counter(s, &RE).unwrap();
     let expected_tokens = vec![
       ("Hello".to_string(), 1),
       (",".to_string(), 1),
@@ -196,7 +212,7 @@ mod tests {
     assert_eq!(tokens, expected_tokens);
 
     let s = "你好，世界！Now是2024年。";
-    let tokens = pretokenizer(s, &RE).unwrap();
+    let tokens = pretokenizer_counter(s, &RE).unwrap();
     let expected_tokens = vec![
       ("你好".to_string(), 1),
       ("，".to_string(), 1),
@@ -215,7 +231,7 @@ mod tests {
   #[test]
   fn test_sample() {
     let input = std::fs::read_to_string("fixtures/tinystories_sample_5M.txt").unwrap();
-    let tokens = pretokenizer(&input, &RE).unwrap();
+    let tokens = pretokenizer_counter(&input, &RE).unwrap();
     assert_eq!(tokens.get(" the").cloned().unwrap_or(0), 48886);
   }
 

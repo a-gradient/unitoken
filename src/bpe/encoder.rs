@@ -1,8 +1,18 @@
-use std::collections::{BTreeMap, HashMap};
+use core::num;
+use std::{
+  collections::{BTreeMap, HashMap},
+  fs::File,
+  io::{Read as _, Seek as _},
+  path::Path,
+};
 
 use moka::sync::Cache;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-use crate::{MyError, MyResult};
+use crate::{
+  MyError, MyResult,
+  pretokenizer::{RE, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, split_special_tokens},
+};
 
 use super::*;
 
@@ -216,8 +226,82 @@ where
     self.cache.insert(input.clone(), result.clone());
     Ok(result)
   }
+
+  pub fn encode_file<P: AsRef<std::path::Path>>(
+    &self, path: P, num_chunks: u32, special_tokens: Vec<String>, split_special_token: Option<&str>,
+  ) -> MyResult<Vec<Word<Idx>>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
+    let words = get_words_from_file(&path, num_chunks, special_tokens.clone(), split_special_token)?;
+    let input = words.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<Arc<[C]>>>();
+    let encoded = self._encode_words(&input)?;
+
+    let mut cache = HashMap::from_iter(input.into_iter().zip(encoded.into_iter()).map(|(k, v)| (k, v)));
+    special_tokens.iter().try_for_each(|token| -> MyResult<()> {
+      let w = token.to_word();
+      let idx = *self.vocab_rev.get(&w).ok_or(MyError::Oov(w.display()))?;
+      let encoded_special = vec![idx].to_word();
+      cache.insert(w, encoded_special);
+      Ok(())
+    })?;
+
+    let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
+    let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
+    let path = path.as_ref().to_path_buf();
+    let params = boundaries
+      .iter()
+      .zip(boundaries.iter().skip(1))
+      .enumerate()
+      .map(|(index, (start, end))| (index, *start, (*end - *start) as usize))
+      .collect::<Vec<_>>();
+    let mut segment_results = params
+      .into_iter()
+      .map(|(index, offset, len)| -> MyResult<(usize, Vec<Word<Idx>>)> {
+        let segment_result =  _encode_segment(&path, &special_tokens, offset, len, &cache)?;
+        Ok((index, segment_result))
+      })
+      .collect::<MyResult<Vec<_>>>()?;
+    segment_results.sort_by_key(|(index, _)| *index);
+    let result = segment_results.into_iter().map(|(_, res)| res).flatten().collect::<Vec<_>>();
+    Ok(result)
+  }
 }
 
+fn _encode_segment<P: AsRef<Path>, C>(
+  path: P, special_tokens: &Vec<String>, offset: u64, len: usize, cache: &HashMap<Arc<[C]>, Arc<[Idx]>>,
+) -> MyResult<Vec<Arc<[Idx]>>>
+where
+  for<'a> &'a str: ToWord<C>,
+  C: std::hash::Hash + Eq + Clone,
+  Word<C>: WordExt,
+{
+  let mut file = File::open(&path)?;
+  file.seek(std::io::SeekFrom::Start(offset))?;
+  let mut buffer = vec![0; len];
+  file.read_exact(&mut buffer)?;
+
+  let content = String::from_utf8_lossy(&buffer);
+  let parts = split_special_tokens(&content, &special_tokens)?;
+  let mut res = Vec::new();
+  for (part, is_special) in parts.iter() {
+    if *is_special {
+      let w = part.to_word();
+      let idx = cache.get(&w).ok_or_else(|| MyError::Oov(w.display()))?;
+      res.push(idx.clone());
+    } else {
+      pretokenizer_tokens(part, &RE)?
+        .iter()
+        .try_for_each(|token| -> MyResult<()> {
+          let w = token.to_word();
+          let idx = cache.get(&w).ok_or(MyError::Oov(w.display()))?;
+          res.push(idx.clone());
+          Ok(())
+        })?;
+    }
+  }
+  return Ok(res);
+}
 #[cfg(test)]
 mod tests {
   use super::*;
