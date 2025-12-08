@@ -287,7 +287,7 @@ mod tests {
   fn test_bpe_from_words() {
     const NAME: &str = "tinystories_sample_5M";
     // const NAME: &str = "TinyStoriesV2-GPT4-train";
-    let input = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();
+    let input = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
     let mut bpe = BpeTrainer::from_words(words, &vec!["<|endoftext|>".to_string()]);
     bpe.init_training();

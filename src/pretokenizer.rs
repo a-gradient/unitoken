@@ -167,6 +167,7 @@ pub fn save_words<W: std::io::Write>(w: W, words: &ordermap::OrderMap<String, Fr
 
 #[cfg(test)]
 mod tests {
+  use ordermap::OrderMap;
   use super::*;
   #[test]
   fn test_pretokenizer() {
@@ -240,13 +241,14 @@ mod tests {
       Some("<|endoftext|>"),
     )
     .unwrap();
+    let words = sort_words(&words);
     if NAME == "tinystories_sample_5M" {
       assert_eq!(words.get(" the").cloned().unwrap_or(0), 48886);
     }
     std::fs::create_dir_all("out").ok();
-    serde_json::to_writer_pretty(std::fs::File::create(format!("out/{NAME}_words.json")).unwrap(), &words).unwrap();
-    let answer = std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap();
-    let expected: BTreeMap<String, Freq> = serde_json::from_str(&answer).unwrap();
+    serde_json::to_writer_pretty(std::fs::File::create(format!("out/_words.{NAME}.json")).unwrap(), &words).unwrap();
+    let answer = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
+    let expected: OrderMap<String, Freq> = serde_json::from_str(&answer).unwrap();
     assert_eq!(words, expected);
   }
 }

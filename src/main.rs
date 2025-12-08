@@ -1,7 +1,5 @@
-use clap::{Arg, ArgAction, Command, Parser, arg};
-use rayon::vec;
+use clap::{Parser, arg};
 use std::{
-  fmt::Debug,
   fs,
   path::{Path, PathBuf},
 };
@@ -14,13 +12,13 @@ use unitoken::{
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-  #[arg(short, long)]
+  #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
-  #[arg(short, long)]
+  #[arg(short = 'c', long = "chunks", default_value = "1024")]
   num_chunks: u32,
-  #[arg(short, long, value_parser = clap::value_parser!(PathBuf), default_value = "out")]
+  #[arg(short, long = "out", default_value = "out")]
   out_dir: PathBuf,
-  #[arg(short, long)]
+  #[arg(short='s', long, default_value = "10000")]
   vocab_size: u32,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
   input_file: PathBuf,
@@ -50,7 +48,7 @@ fn train_bpe<P: AsRef<Path>>(
   fs::create_dir_all(out_dir).expect("Failed to create output directory");
   let vocab_filename = format!("vocab.{file_stem}.json");
   let merges_filename = format!("merges.{file_stem}.txt");
-  let words_filename = format!("words.{file_stem}.json");
+  let words_filename = format!("_words.{file_stem}.json");
   let mut open_options = fs::OpenOptions::new();
   open_options.write(true).create(true).truncate(true);
   let vocab_file = open_options.open(out_dir.join(vocab_filename)).unwrap();
@@ -62,18 +60,18 @@ fn train_bpe<P: AsRef<Path>>(
   save_words(words_file, &words_sorted).unwrap();
 }
 
+fn lines_of(s: &str) -> Vec<String> {
+  s.lines().filter(|line| !line.is_empty()).map(|line| line.to_string()).collect()
+}
+
 fn main() {
   let cli = Cli::parse();
   let special_tokens: Vec<String> = match &cli.special_tokens_path {
     Some(path) => {
       let content = fs::read_to_string(path).expect("Failed to read special tokens file");
-      content.lines().map(|line| line.to_string()).collect()
+      lines_of(&content)
     }
-    None => include_str!("../fixtures/default_special_tokens.txt")
-      .lines()
-      .filter(|line| !line.is_empty())
-      .map(|line| line.to_string())
-      .collect(),
+    None => lines_of(include_str!("../fixtures/default_special_tokens.txt")),
   };
   train_bpe(
     &cli.input_file,
