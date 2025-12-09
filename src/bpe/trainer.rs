@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, sync::atomic::AtomicU64};
 
-use crate::{MyResult, spec::{Spec, gpt2::Gpt2Spec}};
+use crate::{MyResult, spec::Spec};
 
 use super::*;
 
@@ -37,6 +37,21 @@ impl BpeTrainer<u8> {
     bpe
   }
 
+  pub fn _vocab_insert_all_single_byte(&mut self) -> Idx {
+    let start_idx = self.start_vocab_idx.fetch_add(256, std::sync::atomic::Ordering::AcqRel) as Idx;
+    let vocab = &mut self.vocab;
+    for i in 0u8..=255 {
+      vocab.insert(i as Idx + start_idx, [i].to_word());
+    }
+    start_idx + 256
+  }
+}
+
+impl<C: Clone> BpeTrainer<C>
+where
+  Word<C>: WordDebugExt,
+  for<'a> &'a str: ToWord<C>,
+{
   pub fn _vocab_insert_special_tokens(&mut self, special_tokens: &[String]) -> Idx {
     let length = special_tokens.len();
     let start_idx = self.start_vocab_idx.fetch_add(length as u64, std::sync::atomic::Ordering::AcqRel) as Idx;
@@ -47,21 +62,12 @@ impl BpeTrainer<u8> {
     start_idx + length as Idx
   }
 
-  pub fn _vocab_insert_all_single_byte(&mut self) -> Idx {
-    let start_idx = self.start_vocab_idx.fetch_add(256, std::sync::atomic::Ordering::AcqRel) as Idx;
-    let vocab = &mut self.vocab;
-    for i in 0u8..=255 {
-      vocab.insert(i as Idx + start_idx, [i].to_word());
-    }
-    start_idx + 256
+  pub fn save_vocab_json<W: std::io::Write>(&self, spec: &dyn Spec<C, Idx>, mut w: W) -> MyResult<()> {
+    spec.encode_vocab(&mut w, &self.vocab)
   }
 
-  pub fn save_vocab_json<W: std::io::Write>(&self, w: W) -> MyResult<()> {
-    Gpt2Spec.encode_vocab(w, &self.vocab)
-  }
-
-  pub fn save_merges_txt<W: std::io::Write>(&self, w: W) -> MyResult<()> {
-    Gpt2Spec.encode_merges(w, &self.merges)
+  pub fn save_merges_txt<W: std::io::Write>(&self, spec: &dyn Spec<C, Idx>, mut w: W) -> MyResult<()> {
+    spec.encode_merges(&mut w, &self.merges)
   }
 }
 
@@ -182,7 +188,9 @@ where
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+  use crate::spec::gpt2::Gpt2Spec;
+
+use super::*;
 
   fn _test_bpe_merge(pretokens: &[(&str, Freq)], merges: &[((&str, &str), Vec<(&str, &str, MergeData)>)]) {
     fn pretoken(s: &str, freq: Freq) -> PreToken<u8, Idx> {
@@ -326,8 +334,8 @@ mod tests {
       // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);
     }
     std::fs::create_dir_all("out").ok();
-    bpe.save_vocab_json(std::fs::File::create(format!("out/vocab.{NAME}.json")).unwrap()).unwrap();
-    bpe.save_merges_txt(std::fs::File::create(format!("out/merges.{NAME}.txt")).unwrap()).unwrap();
+    bpe.save_vocab_json(&Gpt2Spec, std::fs::File::create(format!("out/vocab.{NAME}.json")).unwrap()).unwrap();
+    bpe.save_merges_txt(&Gpt2Spec, std::fs::File::create(format!("out/merges.{NAME}.txt")).unwrap()).unwrap();
 
     let merges_txt = std::fs::read_to_string(format!("out/merges.{NAME}.txt")).unwrap();
     let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.txt")).unwrap();

@@ -8,11 +8,11 @@ use crate::{MyError, MyResult, bpe::{Idx, Merge, Word}, spec::{Spec, WordDisplay
 
 pub struct Gpt2Spec;
 
-impl<C: Ord> Spec<Idx, C> for Gpt2Spec
+impl<C: Ord> Spec<C, Idx> for Gpt2Spec
 where
   Self: WordDisplay<C>,
 {
-  fn encode_vocab<W: std::io::Write>(&self, mut w: W, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<()> {
+  fn encode_vocab(&self, w: &mut dyn std::io::Write, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<()> {
     let mut map = OrderMap::new();
     for (idx, word) in vocab.iter() {
       let s = self.word_display(word);
@@ -23,7 +23,7 @@ where
     Ok(())
   }
 
-  fn decode_vocab<R: std::io::Read>(&self, r: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
+  fn decode_vocab(&self, r: &mut dyn std::io::Read) -> MyResult<BTreeMap<Idx, Word<C>>> {
     let map: OrderMap<String, Idx> = serde_json::from_reader(BufReader::new(r))?;
     map.into_iter().map(|(s, idx)| {
       let word = self.word_parse(&s)?;
@@ -31,7 +31,7 @@ where
     }).collect()
   }
 
-  fn encode_merges<W: std::io::Write>(&self, mut w: W, merges: &Vec<Merge<C, Idx>>) -> MyResult<()> {
+  fn encode_merges(&self, w: &mut dyn std::io::Write, merges: &Vec<Merge<C, Idx>>) -> MyResult<()> {
     for merge in merges.iter() {
       let left = self.word_display(&merge.content.0);
       let right = self.word_display(&merge.content.1);
@@ -40,7 +40,7 @@ where
     Ok(())
   }
 
-  fn decode_merges<R: std::io::Read>(&self, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
+  fn decode_merges(&self, reader: &mut dyn std::io::Read, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
     let mut result = Vec::new();
     let mut input = String::new();
     reader.read_to_string(&mut input)?;

@@ -29,16 +29,16 @@ where
   Word<C>: WordDebugExt,
   for<'a> &'a str: ToWord<C>,
 {
-  fn _load_vocab<SPEC: Spec<Idx, C>, R: std::io::Read>(spec: &SPEC, reader: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
-    spec.decode_vocab(reader)
+  fn _load_vocab<R: std::io::Read>(spec: &dyn Spec<C, Idx>, mut reader: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
+    spec.decode_vocab(&mut reader)
   }
 
-  fn _load_merges<SPEC: Spec<Idx, C>, R: std::io::Read>(spec: &SPEC, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
+  fn _load_merges<R: std::io::Read>(spec: &dyn Spec<C, Idx>, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
     spec.decode_merges(&mut reader, vocab)
   }
 
-  pub fn new_from_file<SPEC: Spec<Idx, C>, P: AsRef<std::path::Path>>(
-    spec: &SPEC, vocab_path: P, merges_path: P, special_tokens: Vec<String>,
+  pub fn new_from_file<P: AsRef<std::path::Path>>(
+    spec: &dyn Spec<C, Idx>, vocab_path: P, merges_path: P, special_tokens: Vec<String>,
   ) -> MyResult<Self> {
     let vocab = Self::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
     let merges = Self::_load_merges(spec, std::fs::File::open(merges_path)?, &vocab)?;
@@ -46,7 +46,7 @@ where
     Self::new(vocab, merges, special_tokens)
   }
 
-  pub fn get_special_tokens_from_vocab<SPEC: Spec<Idx, C>, P: AsRef<Path>>(spec: &SPEC, vocab_path: P) -> MyResult<Vec<String>> {
+  pub fn get_special_tokens_from_vocab<P: AsRef<Path>>(spec: &dyn Spec<C, Idx>, vocab_path: P) -> MyResult<Vec<String>> {
     let vocab = BpeEncoder::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
     let mut special_tokens = Vec::new();
     for index in 0..vocab.len() {

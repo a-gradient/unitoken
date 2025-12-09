@@ -9,8 +9,8 @@ use std::{
 };
 
 use unitoken::{
-  bpe::{BpeEncoder, BpeTrainer},
-  pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::gpt2::Gpt2Spec,
+  bpe::{BpeEncoder, BpeTrainer, Character, Idx},
+  pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec},
 };
 
 mod _metrics;
@@ -57,6 +57,37 @@ impl Commands {
   }
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum SpecEnum {
+  #[clap(name = "gpt2")]
+  Gpt2,
+  #[clap(name = "uni")]
+  Uni,
+}
+
+impl SpecEnum {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Self::Gpt2 => "gpt2",
+      Self::Uni => "uni",
+    }
+  }
+
+  pub fn get_u8(&self) -> Box<dyn Spec<u8, Idx>> {
+    match self {
+      Self::Gpt2 => Box::new(Gpt2Spec),
+      Self::Uni => Box::new(UniSpec),
+    }
+  }
+
+  pub fn get_char(&self) -> Box<dyn Spec<Character, Idx>> {
+    match self {
+      Self::Gpt2 => unimplemented!(),
+      Self::Uni => Box::new(UniSpec),
+    }
+  }
+}
+
 #[derive(Parser)]
 struct TrainArgs {
   #[arg(short, long, action = clap::ArgAction::Count)]
@@ -67,6 +98,8 @@ struct TrainArgs {
   vocab_size: u32,
   #[arg(short = 'c', long = "chunks", default_value = "1024")]
   num_chunks: u32,
+  #[arg(long, default_value = "gpt2")]
+  spec: SpecEnum,
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
@@ -83,6 +116,8 @@ struct EncodeArgs {
   vocab_name: Option<String>,
   #[arg(short = 'c', long = "chunks", default_value = "1024")]
   num_chunks: u32,
+  #[arg(long, default_value = "gpt2")]
+  spec: SpecEnum,
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
@@ -120,7 +155,7 @@ fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chu
 }
 
 fn bpe_train<P: AsRef<Path>>(
-  path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf,
+  path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf, spec: SpecEnum,
 ) {
   fs::create_dir_all(out_dir).expect("Failed to create output directory");
 
@@ -163,13 +198,13 @@ fn bpe_train<P: AsRef<Path>>(
   let vocab_file = fs::File::create(out_dir.join(vocab_filename)).unwrap();
   let merges_file = fs::File::create(out_dir.join(merges_filename)).unwrap();
 
-  bpe.save_vocab_json(vocab_file).unwrap();
-  bpe.save_merges_txt(merges_file).unwrap();
+  bpe.save_vocab_json(spec.get_u8().as_ref(), vocab_file).unwrap();
+  bpe.save_merges_txt(spec.get_u8().as_ref(), merges_file).unwrap();
 }
 
-fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf) {
+fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf, spec: SpecEnum) {
   info!("Initializing BPE encoder...");
-  let bpe = BpeEncoder::new_from_file(&Gpt2Spec, vocab_path, merges_path, special_tokens.clone()).expect("create bpe encoder");
+  let bpe = BpeEncoder::new_from_file(spec.get_u8().as_ref(), vocab_path, merges_path, special_tokens.clone()).expect("create bpe encoder");
 
   info!("Encoding file: {}", path.as_ref().display());
   let idxs = bpe.encode_file_with_cache(&path, num_chunks).expect("encode file");
@@ -202,6 +237,7 @@ fn run_train(args: TrainArgs) {
     args.num_chunks,
     &special_tokens,
     &args.out_dir,
+    args.spec,
   );
 }
 
@@ -239,6 +275,7 @@ fn run_encode(args: EncodeArgs) {
     &lines_of(include_str!("../fixtures/default_special_tokens.txt")),
     args.num_chunks,
     &out_file,
+    args.spec,
   );
 }
 

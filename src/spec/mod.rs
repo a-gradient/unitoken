@@ -5,12 +5,12 @@ use crate::{MyResult, bpe::{Merge, Word}};
 pub mod gpt2;
 pub mod uni;
 
-pub trait Spec<Idx, Char> {
-  fn encode_vocab<W: std::io::Write>(&self, w: W, vocab: &BTreeMap<Idx, Word<Char>>) -> MyResult<()>;
-  fn decode_vocab<R: std::io::Read>(&self, r: R) -> MyResult<BTreeMap<Idx, Word<Char>>>;
+pub trait Spec<Char, Idx> {
+  fn encode_vocab(&self, w: &mut dyn std::io::Write, vocab: &BTreeMap<Idx, Word<Char>>) -> MyResult<()>;
+  fn decode_vocab(&self, r: &mut dyn std::io::Read) -> MyResult<BTreeMap<Idx, Word<Char>>>;
 
-  fn encode_merges<W: std::io::Write>(&self, w: W, merges: &Vec<Merge<Char, Idx>>) -> MyResult<()>;
-  fn decode_merges<R: std::io::Read>(&self, r: R, vocab: &BTreeMap<Idx, Word<Char>>) -> MyResult<Vec<Merge<Char, Idx>>>;
+  fn encode_merges(&self, w: &mut dyn std::io::Write, merges: &Vec<Merge<Char, Idx>>) -> MyResult<()>;
+  fn decode_merges(&self, r: &mut dyn std::io::Read, vocab: &BTreeMap<Idx, Word<Char>>) -> MyResult<Vec<Merge<Char, Idx>>>;
 }
 
 pub trait WordDisplay<C> {
