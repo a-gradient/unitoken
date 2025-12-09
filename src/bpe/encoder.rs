@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap}, io::BufReader, path::Path};
+use std::{collections::{BTreeMap, HashMap}, path::Path};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
@@ -38,14 +38,12 @@ impl BpeEncoder<u8> {
   ) -> MyResult<Self> {
     let vocab = Self::_load_vocab(std::fs::File::open(vocab_path)?)?;
     let merges = Self::_load_merges(std::fs::File::open(merges_path)?, &vocab)?;
-    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
     Self::new(vocab, merges, special_tokens)
   }
 
   pub fn get_special_tokens_from_vocab<P: AsRef<Path>>(vocab_path: P) -> MyResult<Vec<String>> {
     let vocab = BpeEncoder::_load_vocab(std::fs::File::open(vocab_path)?)?;
-    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect::<BTreeMap<_, _>>();
     let mut special_tokens = Vec::new();
     for index in 0..vocab.len() {
       match vocab.get(&(index as Idx)) {
