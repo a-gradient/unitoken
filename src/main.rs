@@ -11,6 +11,8 @@ use unitoken::{
   pretokenizer::{get_words_from_file, save_words, sort_words},
 };
 
+mod _metrics;
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -149,6 +151,7 @@ fn main() {
     1 => tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init(),
     _ => tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init(),
   }
+  _metrics::init_metrics().expect("Failed to initialize metrics recorder");
   debug!("Verbosity level: {}", verbose);
   match cli.command {
     Commands::Train(train_args) => {

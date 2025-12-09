@@ -114,6 +114,8 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
   path: P, special_tokens: &Vec<String>, offset: u64, len: usize,
 ) -> MyResult<BTreeMap<String, Freq>> {
   let _span = trace_span!("get_words_from_segment", offset = offset, len = len).entered();
+
+  metrics::counter!("get_words_from_segment.calls").increment(1);
   let mut file = File::open(&path)?;
   file.seek(std::io::SeekFrom::Start(offset))?;
   let mut buffer = vec![0; len];
@@ -127,6 +129,9 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
       *words.entry(token).or_default() += count;
     }
   }
+  metrics::histogram!("get_words_from_segment.words_count").record(words.len() as f64);
+  metrics::counter!("get_words_from_segment.len").increment(len as _);
+
   trace!(words_len=?words.len(), "result");
   Ok(words)
 }
