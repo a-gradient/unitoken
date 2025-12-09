@@ -96,8 +96,8 @@ struct PlotArgs {
 fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chunks: u32, special_tokens: Vec<String>) -> BTreeMap<String, i64> {
   if output.as_ref().exists() {
     info!("pretokenize file already exists, loading from {}", output.as_ref().display());
-    let result = serde_json::from_reader(fs::File::open(output).expect("open _words file")).expect("read _words file");
-    return result;
+    let data = fs::read_to_string(output).expect("read _words file");
+    let result = serde_json::from_str(&data).expect("serde_json _words file");    return result;
   }
   let split_special_token = special_tokens.get(0).cloned();
 
