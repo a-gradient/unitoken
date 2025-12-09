@@ -3,13 +3,13 @@ use lazy_static::lazy_static;
 use memchr::memmem;
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use std::{
-  collections::{BTreeMap, BTreeSet},
+  collections::{BTreeMap, BTreeSet, HashMap},
   fs::{self, File},
   io::{Read as _, Seek},
   path::Path,
 };
 
-use crate::{MyError, MyResult, bpe::Freq};
+use crate::{MyError, MyResult, bpe::{Freq, Idx}};
 
 lazy_static! {
   /// PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -112,6 +112,26 @@ impl SplitChunk<'_> {
   }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum SplitToken {
+  Special(String),
+  Token(String),
+}
+
+impl SplitToken {
+  pub fn as_str(&self) -> &str {
+    match self {
+      SplitToken::Special(s) => s.as_str(),
+      SplitToken::Token(s) => s.as_str(),
+    }
+  }
+
+  pub fn is_special(&self) -> bool {
+    matches!(self, SplitToken::Special(_))
+  }
+
+}
+
 pub fn create_special_token_regex(special_tokens: &[String]) -> Regex {
   if special_tokens.is_empty() {
     return Regex::new("$^").unwrap(); // matches nothing
@@ -176,6 +196,33 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
   Ok(words)
 }
 
+
+pub fn get_words_index_from_segment<P: AsRef<Path>>(
+  path: P, re_special_tokens: &Regex, offset: u64, len: usize,
+) -> MyResult<HashMap<SplitToken, Vec<Idx>>> {
+  let _span = trace_span!("get_words_index_from_segment", offset = offset, len = len).entered();
+
+  metrics::counter!("get_words_index_from_segment.calls").increment(1);
+  let buffer = read_file_to_buffer(&path, offset, len)?;
+
+  let content = String::from_utf8_lossy(&buffer);
+  let parts = split_special_tokens(&content, &re_special_tokens)?;
+  let mut words_index: HashMap<SplitToken, Vec<Idx>> = HashMap::new();
+  let mut index = 0;
+  for part in parts.iter() {
+    if part.is_special() {
+      words_index.entry(SplitToken::Special(part.as_str().to_string())).or_default().push(index);
+      index += 1;
+    } else {
+      for token in pretokenizer_tokens(part.as_str(), &RE)? {
+        words_index.entry(SplitToken::Token(token)).or_default().push(index);
+        index += 1;
+      }
+    }
+  }
+  Ok(words_index)
+}
+
 pub fn get_words_from_file<P: AsRef<Path>>(
   path: P, num_chunks: u32, re_special_tokens: Regex, split_special_token: Option<&str>,
 ) -> MyResult<BTreeMap<String, Freq>> {
@@ -201,6 +248,63 @@ pub fn get_words_from_file<P: AsRef<Path>>(
       },
     )?;
   Ok(words)
+}
+
+pub fn get_words_index_from_file<P: AsRef<Path>>(
+  path: P, num_chunks: u32, re_special_tokens: Regex, split_special_token: Option<&str>,
+) -> MyResult<HashMap<SplitToken, Vec<Idx>>> {
+  let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
+  let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
+  let path = path.as_ref().to_path_buf();
+  let params = boundaries
+    .iter()
+    .zip(boundaries.iter().skip(1))
+    .enumerate()
+    .map(|(index , (start, end))| (index, *start, (*end - *start) as usize))
+    .collect::<Vec<_>>();
+
+  let mut segments_words_index = params
+    .into_par_iter()
+    .map(|(index, offset, len)| {
+      get_words_index_from_segment(&path, &re_special_tokens.clone(), offset, len)
+        .map(|segment_words_index| (index, segment_words_index))
+    })
+    .collect::<MyResult<Vec<_>>>()?;
+
+  segments_words_index.sort_by(|(chunk_id_a, _), (chunk_id_b, _)| chunk_id_a.cmp(chunk_id_b));
+  let mut segments_words_index = segments_words_index.into_iter().map(|(_, m)| m).collect::<Vec<_>>();
+  let token_nums = segments_words_index.iter().map( | words_index| {
+    words_index.values().map(|v| v.len()).sum::<usize>()
+  }).collect::<Vec<_>>();
+  let index_offset = prefix_sum(&token_nums);
+  for (segment_words_index, &start_index) in segments_words_index.iter_mut().zip(&index_offset) {
+    for idxs in segment_words_index.values_mut() {
+      for idx in idxs {
+        *idx += start_index as Idx;
+      }
+    }
+  }
+
+  let mut words_index: HashMap<SplitToken, Vec<Idx>> = HashMap::new();
+
+  segments_words_index
+    .into_iter()
+    .flatten()
+    .for_each(|(token, idxs)| {
+      words_index.entry(token).or_default().extend(idxs);
+    });
+  Ok(words_index)
+}
+
+fn prefix_sum(v: &[usize]) -> Vec<usize> {
+  let mut result = Vec::with_capacity(v.len());
+  let mut sum = 0;
+  result.push(sum);
+  for i in v[..v.len()-1].iter() {
+    sum += i;
+    result.push(sum);
+  }
+  result
 }
 
 pub fn sort_words(words: &BTreeMap<String, Freq>) -> ordermap::OrderMap<String, Freq> {
@@ -311,5 +415,35 @@ mod tests {
       &create_special_token_regex(&["<|endoftext|>".to_string()]),
     ).unwrap();
     assert!(parts.len() == 12915);
+  }
+
+  #[test]
+  fn test_get_words_index_from_segment() {
+    const NAME: &str = "tinystories_sample_5M";
+    let path = format!("fixtures/{NAME}.txt");
+    let words_index = get_words_index_from_segment(
+      &path,
+      &create_special_token_regex(&["<|endoftext|>".to_string()]),
+      0, 5242880,
+    ).unwrap();
+    let idxs = words_index.get(&SplitToken::Token(" the".to_string())).unwrap();
+    println!("the idxs length: {:?}", idxs.len());
+    assert!( idxs.len() != 0);
+  }
+
+  #[test]
+  fn test_get_words_index_from_file() {
+    const NAME: &str = "tinystories_sample_5M";
+    let path = format!("fixtures/{NAME}.txt");
+    let num_chunks = 4;
+    let words_index = get_words_index_from_file(
+      path,
+      num_chunks,
+      create_special_token_regex(&["<|endoftext|>".to_string()]),
+      Some("<|endoftext|>"),
+    ).unwrap();
+    assert!(words_index.len() > 0);
+    let words_index = words_index.into_iter().map(|(w, v)| (w.as_str().to_string(), v)).collect::<HashMap<_, _>>();
+    serde_json::to_writer_pretty(std::fs::File::create(format!("out/_words_index.{NAME}.json")).unwrap(), &words_index).unwrap();
   }
 }
