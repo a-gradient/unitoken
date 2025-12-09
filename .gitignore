@@ -2,3 +2,5 @@
 Cargo.lock
 out/
 *.svg
+.cache
+uv.lock
