@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
-use lazy_static::lazy_static;
 use super::*;
 
 pub trait ToWord<C> {
@@ -31,7 +30,7 @@ pub trait WordExt {
 
 impl WordExt for Word<u8> {
   fn display(&self) -> String {
-    _printable(self)
+    crate::spec::gpt2::_printable(self)
   }
 }
 
@@ -40,52 +39,11 @@ impl WordExt for Word<Character> {
     self
       .iter()
       .map(|c| match c {
-        Character::Unicode(ch) => *ch,
-        Character::Byte(b) => PRINTABLE.get(b).copied().unwrap_or('.'),
+        Character::Unicode(ch) => ch.to_string(),
+        Character::Byte(b) => format!("\\x{:02x}", *b),
       })
       .collect()
   }
-}
-
-lazy_static! {
-  static ref PRINTABLE: BTreeMap<u8, char> = {
-    let mut map = BTreeMap::new();
-    for range in [33u8..=126, 161..=172, 174..=255].iter() {
-      for b in range.clone() {
-        map.insert(b as u8, b as char);
-      }
-    }
-    let mut i = 0;
-    let mut next_char = || {
-      i += 1;
-      char::from_u32(i + 255).unwrap()
-    };
-    for b in 0u32..=255 {
-      map.entry(b as u8).or_insert_with(&mut next_char);
-    }
-    map
-  };
-  static ref PRINTABLE_REV: BTreeMap<char, u8> = {
-    let mut map = BTreeMap::new();
-    for (b, ch) in PRINTABLE.iter() {
-      map.insert(*ch, *b);
-    }
-    map
-  };
-}
-
-pub(crate) fn _printable(w: &Word<u8>) -> String {
-  w.iter()
-    .map(|b| PRINTABLE.get(b).copied().unwrap_or('.'))
-    .collect()
-}
-
-pub(crate) fn _from_printable(s: &str) -> Result<Word<u8>, char> {
-  let bytes = s
-    .chars()
-    .map(|ch| PRINTABLE_REV.get(&ch).copied().ok_or(ch))
-    .collect::<Result<Vec<_>, _>>()?;
-  Ok(Arc::from(bytes.into_boxed_slice()))
 }
 
 pub(crate) fn _merge<C, I>(words: &mut Vec<PreToken<C, I>>, merge: &Merge<C, I>, target_idx: I) -> BTreeMap<(I, I), MergeData>

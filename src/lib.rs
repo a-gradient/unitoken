@@ -2,6 +2,7 @@
 extern crate tracing;
 
 pub mod bpe;
+pub mod spec;
 pub mod pretokenizer;
 
 #[derive(thiserror::Error, Debug)]

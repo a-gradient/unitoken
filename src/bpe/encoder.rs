@@ -5,7 +5,7 @@ use moka::sync::Cache;
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens},
+  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::{Spec, gpt2::Gpt2Spec},
 };
 
 use super::*;
@@ -25,48 +25,12 @@ pub struct BpeEncoder<C = u8> {
 }
 
 impl BpeEncoder<u8> {
-  fn _load_vocab<R: std::io::Read>(reader: R) -> MyResult<BTreeMap<Word<u8>, Idx>> {
-    let input: BTreeMap<String, u64> = serde_json::from_reader(BufReader::new(reader))?;
-    input.into_iter().map(|(s, i)| {
-      let w = _from_printable(&s).map_err(|e| MyError::InvalidPrintableChar(e))?;
-      Ok((w, i as Idx))
-    }).collect()
+  fn _load_vocab<R: std::io::Read>(reader: R) -> MyResult<BTreeMap<Idx, Word<u8>>> {
+    Gpt2Spec.decode_vocab(reader)
   }
 
-  fn _load_merges<R: std::io::Read>(mut reader: R, vocab: &BTreeMap<Word<u8>, Idx>) -> MyResult<Vec<Merge<u8, Idx>>> {
-    let mut result = Vec::new();
-    let mut input = String::new();
-    reader.read_to_string(&mut input)?;
-    fn get_kv(vocab: &BTreeMap<Word<u8>, Idx>, s: &str) -> MyResult<(Idx, Word<u8>)> {
-      let w = _from_printable(s).map_err(|e| MyError::InvalidPrintableChar(e))?;
-      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(w.display()))?, w))
-    }
-    for (i, line) in input.lines().enumerate() {
-      if line.trim().is_empty() {
-        continue;
-      }
-      let mut main = line;
-      let mut freq = 0;
-      if line.contains(" => ") {
-        let split = line.rsplitn(2, " => ").collect::<Vec<_>>();
-        main = split.last().unwrap();
-        if split.len() > 1 {
-          freq = split[0].trim().parse().unwrap_or_default();
-        }
-      }
-      let parts = main.trim().split_whitespace().collect::<Vec<_>>();
-      if parts.len() != 2 {
-        return Err(MyError::MergeTxt("main parts is not 2", i))
-      }
-      let (a_idx, a) = get_kv(vocab, parts[0])?;
-      let (b_idx, b) = get_kv(vocab, parts[1])?;
-      let merged = format!("{}{}", parts[0], parts[1]);
-      let (m_idx, _) = get_kv(vocab, &merged)?;
-      let mut merge = Merge::new((a_idx, b_idx), (a, b)).with_target(m_idx);
-      merge.data.freq = freq;
-      result.push(merge);
-    }
-    Ok(result)
+  fn _load_merges<R: std::io::Read>(mut reader: R, vocab: &BTreeMap<Idx, Word<u8>>) -> MyResult<Vec<Merge<u8, Idx>>> {
+    Gpt2Spec.decode_merges(&mut reader, vocab)
   }
 
   pub fn new_from_file<P: AsRef<std::path::Path>>(
@@ -390,7 +354,6 @@ mod tests {
   fn _setup_bpe(name: &str) -> BpeEncoder<u8> {
     let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
     let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
-    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
     BpeEncoder::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap()
   }

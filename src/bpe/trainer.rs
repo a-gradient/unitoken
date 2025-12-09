@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, sync::atomic::AtomicU64};
 
-use crate::MyResult;
+use crate::{MyResult, spec::{Spec, gpt2::Gpt2Spec}};
 
 use super::*;
 
@@ -56,23 +56,12 @@ impl BpeTrainer<u8> {
     start_idx + 256
   }
 
-  pub fn save_vocab_json<W: std::io::Write>(&self, mut w: W) -> Result<(), std::io::Error> {
-    let mut map = OrderMap::new();
-    for (idx, word) in self.vocab.iter() {
-      let s = _printable(word);
-      map.insert(s, idx);
-    }
-    let json = serde_json::to_string_pretty(&map).unwrap();
-    write!(w, "{}", json)
+  pub fn save_vocab_json<W: std::io::Write>(&self, w: W) -> MyResult<()> {
+    Gpt2Spec.encode_vocab(w, &self.vocab)
   }
 
-  pub fn save_merges_txt<W: std::io::Write>(&self, mut w: W) -> Result<(), std::io::Error> {
-    for merge in self.merges.iter() {
-      let left = _printable(&merge.content.0);
-      let right = _printable(&merge.content.1);
-      writeln!(w, "{} {} => {}", left, right, merge.data.freq)?;
-    }
-    Ok(())
+  pub fn save_merges_txt<W: std::io::Write>(&self, w: W) -> MyResult<()> {
+    Gpt2Spec.encode_merges(w, &self.merges)
   }
 }
 
@@ -295,7 +284,7 @@ mod tests {
     for _ in 0..3 {
       bpe.step();
     }
-    let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, _printable(&w))).skip(256).collect::<Vec<_>>();
+    let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, w.display())).skip(256).collect::<Vec<_>>();
     assert_eq!(
       result_vocab,
       vec![
@@ -305,8 +294,8 @@ mod tests {
       ]
     );
     let result_merges = bpe.merges.into_iter().map(|m| {
-      let left = _printable(&m.content.0);
-      let right = _printable(&m.content.1);
+      let left = m.content.0.display();
+      let right = m.content.1.display();
       (left, right, m.data.freq)
     }).collect::<Vec<_>>();
     assert_eq!(
