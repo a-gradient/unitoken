@@ -130,10 +130,24 @@ where
       .cloned()
   }
 
-  pub fn step(&mut self) -> Option<Idx> where C: Ord {
+  fn _get_largest_merge2(&self) -> Option<Merge<C, Idx>> where C: Ord + Send + Sync + 'static {
+    use rayon::prelude::*;
+    self
+      .pre_merges
+      .par_iter()
+      .map(|(_, m)| m)
+      .max_by_key(|m| (m.data.freq, &m.content))
+      .cloned()
+  }
+
+  pub fn step(&mut self) -> Option<Idx> where C: Ord + Send + Sync + 'static {
     // find the most frequent merge,
     // if the frequency is the same, choose the lexicographically largest one.
-    let merge = self._get_largest_merge()?;
+    let merge = if self.pre_merges.len() < 100_000 {
+      self._get_largest_merge()?
+    } else {
+      self._get_largest_merge2()?
+    };
     let target_idx = self._add_vocab_idx();
     let changes = self.merge(&merge, target_idx);
     // println!("Merge {:?} (freq={}) into idx {}", merge.tp, merge.data.freq, target_idx);
