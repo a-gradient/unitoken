@@ -28,15 +28,15 @@ pub struct PreToken<C, I> {
 }
 
 impl<C, I> PreToken<C, I> {
-  pub fn display(&self) -> String where Word<C>: WordExt {
-    format!("<{:?} => {}>", self.src.display(), self.freq)
+  pub fn display(&self) -> String where Word<C>: WordDebugExt {
+    format!("<{:?} => {}>", self.src.debug_display(), self.freq)
   }
 
-  pub fn display_split(&self, vocabs: &BTreeMap<I, Word<C>>) -> String where I: Ord, C: Clone, Word<C>: WordExt {
+  pub fn display_split(&self, vocabs: &BTreeMap<I, Word<C>>) -> String where I: Ord, C: Clone, Word<C>: WordDebugExt {
     let parts = self
       .idxs
       .iter()
-      .map(|i| vocabs.get(i).unwrap().display())
+      .map(|i| vocabs.get(i).unwrap().debug_display())
       .collect::<Vec<_>>()
       .join(" ");
     format!("<{} => {}>", parts, self.freq)

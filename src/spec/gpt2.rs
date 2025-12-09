@@ -4,15 +4,18 @@ use std::{collections::BTreeMap, io::BufReader, sync::Arc};
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
 
-use crate::{MyError, MyResult, bpe::{Idx, Merge, Word, utils::WordExt}, spec::Spec};
+use crate::{MyError, MyResult, bpe::{Idx, Merge, Word}, spec::{Spec, WordDisplay}};
 
 pub struct Gpt2Spec;
 
-impl Spec<Idx, u8> for Gpt2Spec {
-  fn encode_vocab<W: std::io::Write>(&self, mut w: W, vocab: &BTreeMap<Idx, Word<u8>>) -> MyResult<()> {
+impl<C: Ord> Spec<Idx, C> for Gpt2Spec
+where
+  Self: WordDisplay<C>,
+{
+  fn encode_vocab<W: std::io::Write>(&self, mut w: W, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<()> {
     let mut map = OrderMap::new();
     for (idx, word) in vocab.iter() {
-      let s = _printable(word);
+      let s = self.word_display(word);
       map.insert(s, idx);
     }
     let json = serde_json::to_string_pretty(&map).unwrap();
@@ -20,32 +23,32 @@ impl Spec<Idx, u8> for Gpt2Spec {
     Ok(())
   }
 
-  fn decode_vocab<R: std::io::Read>(&self, r: R) -> MyResult<BTreeMap<Idx, Word<u8>>> {
+  fn decode_vocab<R: std::io::Read>(&self, r: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
     let map: OrderMap<String, Idx> = serde_json::from_reader(BufReader::new(r))?;
     map.into_iter().map(|(s, idx)| {
-      let word = _from_printable(&s).map_err(|ch| crate::MyError::InvalidPrintableChar(ch))?;
+      let word = self.word_parse(&s)?;
       Ok((idx, word))
     }).collect()
   }
 
-  fn encode_merges<W: std::io::Write>(&self, mut w: W, merges: &Vec<Merge<u8, Idx>>) -> MyResult<()> {
+  fn encode_merges<W: std::io::Write>(&self, mut w: W, merges: &Vec<Merge<C, Idx>>) -> MyResult<()> {
     for merge in merges.iter() {
-      let left = _printable(&merge.content.0);
-      let right = _printable(&merge.content.1);
+      let left = self.word_display(&merge.content.0);
+      let right = self.word_display(&merge.content.1);
       writeln!(w, "{} {} => {}", left, right, merge.data.freq)?;
     }
     Ok(())
   }
 
-  fn decode_merges<R: std::io::Read>(&self, mut reader: R, vocab: &BTreeMap<Idx, Word<u8>>) -> MyResult<Vec<Merge<u8, Idx>>> {
+  fn decode_merges<R: std::io::Read>(&self, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
     let mut result = Vec::new();
     let mut input = String::new();
     reader.read_to_string(&mut input)?;
-    let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<Word<u8>, Idx>>();
-    fn get_kv(vocab: &BTreeMap<Word<u8>, Idx>, s: &str) -> MyResult<(Idx, Word<u8>)> {
-      let w = _from_printable(s).map_err(|e| MyError::InvalidPrintableChar(e))?;
-      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(w.display()))?, w))
-    }
+    let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
+    let get_kv = |vocab: &BTreeMap<Word<C>, Idx>, s: &str| -> MyResult<(Idx, Word<C>)> {
+      let w = self.word_parse(s)?;
+      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(self.word_display(&w)))?, w))
+    };
     for (i, line) in input.lines().enumerate() {
       if line.trim().is_empty() {
         continue;
@@ -102,13 +105,24 @@ lazy_static! {
   };
 }
 
-pub(crate) fn _printable(w: &Word<u8>) -> String {
+impl WordDisplay<u8> for Gpt2Spec {
+  fn word_display(&self, word: &Word<u8>) -> String {
+    _printable(word)
+  }
+
+  fn word_parse(&self, s: &str) -> MyResult<Word<u8>> {
+    let w = _from_printable(s).map_err(|e| MyError::InvalidPrintableChar(e))?;
+    Ok(w)
+  }
+}
+
+fn _printable(w: &Word<u8>) -> String {
   w.iter()
     .map(|b| PRINTABLE.get(b).copied().unwrap_or('.'))
     .collect()
 }
 
-pub(crate) fn _from_printable(s: &str) -> Result<Word<u8>, char> {
+fn _from_printable(s: &str) -> Result<Word<u8>, char> {
   let bytes = s
     .chars()
     .map(|ch| PRINTABLE_REV.get(&ch).copied().ok_or(ch))

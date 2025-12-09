@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
+use crate::spec::WordDisplay;
+
 use super::*;
 
 pub trait ToWord<C> {
@@ -24,18 +26,18 @@ impl ToWord<u8> for &str {
   }
 }
 
-pub trait WordExt {
-  fn display(&self) -> String;
+pub trait WordDebugExt {
+  fn debug_display(&self) -> String;
 }
 
-impl WordExt for Word<u8> {
-  fn display(&self) -> String {
-    crate::spec::gpt2::_printable(self)
+impl WordDebugExt for Word<u8> {
+  fn debug_display(&self) -> String {
+    crate::spec::uni::UniSpec.word_display(self)
   }
 }
 
-impl WordExt for Word<Character> {
-  fn display(&self) -> String {
+impl WordDebugExt for Word<Character> {
+  fn debug_display(&self) -> String {
     self
       .iter()
       .map(|c| match c {
@@ -121,7 +123,7 @@ pub(crate) fn _update_merge_map<C, I>(merge_map: &mut HashMap<(I, I), Merge<C, I
 where
   I: Ord + std::hash::Hash + Eq + Copy,
   C: Clone,
-  Word<C>: WordExt,
+  Word<C>: WordDebugExt,
 {
   for (tp, data) in changes {
     if tp == merge.tp {

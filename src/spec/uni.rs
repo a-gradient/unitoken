@@ -4,15 +4,18 @@ use fancy_regex::Regex;
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
 
-use crate::{MyError, MyResult, bpe::{Character, Idx, Merge, Word}, spec::Spec};
+use crate::{MyError, MyResult, bpe::{Character, Idx, Merge, Word}, spec::{Spec, WordDisplay}};
 
 pub struct UniSpec;
 
-impl Spec<Idx, Character> for UniSpec {
-  fn encode_vocab<W: std::io::Write>(&self, mut w: W, vocab: &BTreeMap<Idx, Word<Character>>) -> MyResult<()> {
+impl<C: Ord> Spec<Idx, C> for UniSpec
+where
+  Self: WordDisplay<C>,
+{
+  fn encode_vocab<W: std::io::Write>(&self, mut w: W, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<()> {
     let mut map = OrderMap::new();
     for (idx, word) in vocab.iter() {
-      let s = _printable(word);
+      let s = self.word_display(word);
       map.insert(s, idx);
     }
     let json = serde_json::to_string_pretty(&map).unwrap();
@@ -20,32 +23,32 @@ impl Spec<Idx, Character> for UniSpec {
     Ok(())
   }
 
-  fn decode_vocab<R: std::io::Read>(&self, r: R) -> MyResult<BTreeMap<Idx, Word<Character>>> {
+  fn decode_vocab<R: std::io::Read>(&self, r: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
     let map: OrderMap<String, Idx> = serde_json::from_reader(BufReader::new(r))?;
     map.into_iter().map(|(s, idx)| {
-      let word = _from_printable(&s)?;
+      let word = self.word_parse(&s)?;
       Ok((idx, word))
     }).collect()
   }
 
-  fn encode_merges<W: std::io::Write>(&self, mut w: W, merges: &Vec<Merge<Character, Idx>>) -> MyResult<()> {
+  fn encode_merges<W: std::io::Write>(&self, mut w: W, merges: &Vec<Merge<C, Idx>>) -> MyResult<()> {
     for merge in merges.iter() {
-      let left = _printable(&merge.content.0);
-      let right = _printable(&merge.content.1);
+      let left = self.word_display(&merge.content.0);
+      let right = self.word_display(&merge.content.1);
       writeln!(w, "{} {} => {}", left, right, merge.data.freq)?;
     }
     Ok(())
   }
 
-  fn decode_merges<R: std::io::Read>(&self, mut reader: R, vocab: &BTreeMap<Idx, Word<Character>>) -> MyResult<Vec<Merge<Character, Idx>>> {
+  fn decode_merges<R: std::io::Read>(&self, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
     let mut result = Vec::new();
     let mut input = String::new();
     reader.read_to_string(&mut input)?;
     let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
-    fn get_kv(vocab: &BTreeMap<Word<Character>, Idx>, s: &str) -> MyResult<(Idx, Word<Character>)> {
-      let w = _from_printable(s)?;
-      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(_printable(&w)))?, w))
-    }
+    let get_kv = |vocab: &BTreeMap<Word<C>, Idx>, s: &str| -> MyResult<(Idx, Word<C>)> {
+      let w = self.word_parse(s)?;
+      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(self.word_display(&w)))?, w))
+    };
     for (i, line) in input.lines().enumerate() {
       if line.trim().is_empty() {
         continue;
@@ -75,7 +78,42 @@ impl Spec<Idx, Character> for UniSpec {
   }
 }
 
-fn display_char(ch: &Character) -> String {
+impl WordDisplay<Character> for UniSpec {
+  fn word_display(&self, word: &Word<Character>) -> String {
+    _printable(word)
+  }
+
+  fn word_parse(&self, s: &str) -> MyResult<Word<Character>> {
+    let w = _parse_str(s)?;
+    Ok(Arc::from(w.into_boxed_slice()))
+  }
+}
+
+impl WordDisplay<u8> for UniSpec {
+  fn word_display(&self, word: &Word<u8>) -> String {
+    _printable(&_try_combine(word))
+  }
+
+  fn word_parse(&self, s: &str) -> MyResult<Word<u8>> {
+    let w = _parse_str(s)?;
+    let mut bytes = Vec::new();
+    for ch in w.iter() {
+      match ch {
+        Character::Unicode(c) => {
+          let mut buf = [0; 4];
+          let encoded = c.encode_utf8(&mut buf);
+          bytes.extend_from_slice(encoded.as_bytes());
+        }
+        Character::Byte(b) => {
+          bytes.push(*b);
+        }
+      }
+    }
+    Ok(Arc::from(bytes.into_boxed_slice()))
+  }
+}
+
+fn _display_char(ch: &Character) -> String {
   match ch {
     Character::Unicode(' ') => '␣'.to_string(),
     Character::Unicode('␣') => format!("{{u{:04x}}}", '␣' as u32),
@@ -120,17 +158,13 @@ fn _try_combine(word: &Word<u8>) -> Word<Character> {
 }
 
 fn _printable(word: &Word<Character>) -> String {
-  word.iter().map(|c| display_char(c)).collect()
-}
-
-fn _printable_u8(word: &Word<u8>) -> String {
-  _printable(&_try_combine(word))
+  word.iter().map(|c| _display_char(c)).collect()
 }
 
 lazy_static! {
   static ref PRINTABLE_REGEX: Regex = Regex::new(r"\{([ux][0-9a-fA-F]{2,})\}").unwrap();
 }
-fn parse_str(s: &str) -> MyResult<Vec<Character>> {
+fn _parse_str(s: &str) -> MyResult<Vec<Character>> {
   let mut result = Vec::new();
   let mut last_i = 0;
   for m in PRINTABLE_REGEX.find_iter(s) {
@@ -158,29 +192,24 @@ fn parse_str(s: &str) -> MyResult<Vec<Character>> {
   Ok(result)
 }
 
-fn _from_printable(s: &str) -> MyResult<Word<Character>> {
-  let chars = parse_str(s)?;
-  Ok(Arc::from(chars.into_boxed_slice()))
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
 
   #[test]
   fn test_display_char() {
-    assert_eq!(display_char(&Character::Unicode('a')), "a".to_string());
-    assert_eq!(display_char(&Character::Unicode(' ')), "␣".to_string());
-    assert_eq!(display_char(&Character::Unicode('␣')), "{00a0}".to_string());
-    assert_eq!(display_char(&Character::Unicode('{')), "{007b}".to_string());
-    assert_eq!(display_char(&Character::Unicode('}')), "{007d}".to_string());
-    assert_eq!(display_char(&Character::Byte(0x41)), "{41}".to_string());
+    assert_eq!(_display_char(&Character::Unicode('a')), "a".to_string());
+    assert_eq!(_display_char(&Character::Unicode(' ')), "␣".to_string());
+    assert_eq!(_display_char(&Character::Unicode('␣')), "{00a0}".to_string());
+    assert_eq!(_display_char(&Character::Unicode('{')), "{007b}".to_string());
+    assert_eq!(_display_char(&Character::Unicode('}')), "{007d}".to_string());
+    assert_eq!(_display_char(&Character::Byte(0x41)), "{41}".to_string());
   }
 
   #[test]
   fn test_parse_str() {
     let s = "a{u0041} {x42}{x43}{u0044}";
-    let chars = parse_str(s).unwrap();
+    let chars = _parse_str(s).unwrap();
     let expected = vec![
       Character::Unicode('a'),
       Character::Unicode('A'),

@@ -47,7 +47,7 @@ impl BpeEncoder<u8> {
     let mut special_tokens = Vec::new();
     for index in 0..vocab.len() {
       match vocab.get(&(index as Idx)) {
-      Some(token) if token.len() > 1 => special_tokens.push(token.display()),
+      Some(token) if token.len() > 1 => special_tokens.push(token.debug_display()),
       _ => break,
       }
     }
@@ -73,7 +73,7 @@ impl BpeEncoder<u8> {
 
 impl<C: Ord + Clone + Cachable> BpeEncoder<C>
 where
-  Word<C>: WordExt,
+  Word<C>: WordDebugExt,
   for<'a> &'a str: ToWord<C>,
 {
   pub fn new(vocab: BTreeMap<Idx, Word<C>>, merges: Vec<((Idx, Idx), Idx)>, special_tokens: Vec<String>) -> MyResult<Self> {
@@ -102,7 +102,7 @@ where
     let re_special_tokens = create_special_token_regex(&special_tokens);
     let special_tokens = special_tokens.into_iter().map(|s| {
       let w = s.to_word();
-      let idx = *vocab_rev.get(&w).ok_or_else(|| MyError::Oov(w.display()))?;
+      let idx = *vocab_rev.get(&w).ok_or_else(|| MyError::Oov(w.debug_display()))?;
       Ok((s, idx))
     }).collect::<MyResult<_>>()?;
     let max_cap = vocab.len() as u64 * 3 / 2;
@@ -120,7 +120,7 @@ where
 
   pub fn _pretoken(&self, word: Word<C>, freq: Freq) -> MyResult<PreToken<C, Idx>> {
     let idxs = word.iter()
-      .map(|c| self.vocab_bytes.get(c).copied().ok_or_else(|| crate::MyError::OovBytes(vec![c.clone()].to_word().display())))
+      .map(|c| self.vocab_bytes.get(c).copied().ok_or_else(|| crate::MyError::OovBytes(vec![c.clone()].to_word().debug_display())))
       .collect::<Result<_, _>>()?;
     Ok(PreToken { src: word, idxs, freq })
   }
@@ -275,7 +275,7 @@ where
     let mut cache = OrderMap::from_iter(input.into_iter().zip(encoded.into_iter()).rev().map(|(k, v)| (k, v)));
     self.special_tokens.keys().try_for_each(|token| -> MyResult<()> {
       let w = token.to_word();
-      let idx = *self.vocab_rev.get(&w).ok_or(MyError::Oov(w.display()))?;
+      let idx = *self.vocab_rev.get(&w).ok_or(MyError::Oov(w.debug_display()))?;
       let encoded_special = vec![idx].to_word();
       cache.insert(token.to_string(), encoded_special);
       Ok(())

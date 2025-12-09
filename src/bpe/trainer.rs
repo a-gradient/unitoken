@@ -67,7 +67,7 @@ impl BpeTrainer<u8> {
 
 impl<C: Clone> BpeTrainer<C>
 where
-  Word<C>: WordExt
+  Word<C>: WordDebugExt
 {
   pub fn new(words: Vec<PreToken<C, Idx>>) -> Self {
     Self {
@@ -206,8 +206,8 @@ mod tests {
       let mut parts = Vec::new();
       let target = ("__target__").to_word();
       for (tp, data) in changes.iter() {
-        let left = bpe.vocab.get(&tp.0).unwrap_or(&target).display();
-        let right = bpe.vocab.get(&tp.1).unwrap_or(&target).display();
+        let left = bpe.vocab.get(&tp.0).unwrap_or(&target).debug_display();
+        let right = bpe.vocab.get(&tp.1).unwrap_or(&target).debug_display();
         parts.push(format!("({:?}, {:?}, MergeData::new({}).occurs_in({:?}))", left, right, data.freq, data.occurs_in_vec()));
       }
       format!("{{\n  {}\n}}", parts.join(",\n  "))
@@ -284,7 +284,7 @@ mod tests {
     for _ in 0..3 {
       bpe.step();
     }
-    let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, w.display())).skip(256).collect::<Vec<_>>();
+    let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, w.debug_display())).skip(256).collect::<Vec<_>>();
     assert_eq!(
       result_vocab,
       vec![
@@ -294,8 +294,8 @@ mod tests {
       ]
     );
     let result_merges = bpe.merges.into_iter().map(|m| {
-      let left = m.content.0.display();
-      let right = m.content.1.display();
+      let left = m.content.0.debug_display();
+      let right = m.content.1.debug_display();
       (left, right, m.data.freq)
     }).collect::<Vec<_>>();
     assert_eq!(
