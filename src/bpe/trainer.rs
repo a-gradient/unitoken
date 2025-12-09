@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, sync::atomic::AtomicU64};
 
-use crate::{MyResult, spec::Spec};
+use crate::{MyError, MyResult, spec::Spec};
 
 use super::*;
 
@@ -20,16 +20,20 @@ where
   u8: ToWord<C>,
   for<'a> &'a str: ToWord<C>,
 {
-  pub fn from_words<Iter: IntoIterator<Item = (String, Freq)>>(words: Iter, special_tokens: &[String]) -> Self {
+  pub fn from_words<Iter: IntoIterator<Item = (String, Freq)>>(words: Iter, special_tokens: &[String]) -> Self
+  where
+    C: CharToIdx<I>,
+  {
     let vocab_start_idx = special_tokens.len() as u64;
     let mut tokens = Vec::new();
     for (w, freq) in words {
       if special_tokens.contains(&w) {
         continue;
       }
-      let idxs = w.bytes().map(|b| I::from_u64(b as u64 + vocab_start_idx)).collect::<Vec<_>>();
+      let src = w.to_word();
+      let idxs = src.iter().map(|b| b.char_to_idx(vocab_start_idx)).collect::<Vec<_>>();
       let pre_token = PreToken {
-        src: w.to_word(),
+        src: src.clone(),
         idxs,
         freq,
       };
@@ -45,7 +49,10 @@ where
   pub fn _vocab_insert_all_single_byte(&mut self) -> I {
     let start_idx = self.start_vocab_idx.fetch_add(256, std::sync::atomic::Ordering::AcqRel);
     let vocab = &mut self.vocab;
-    for i in 0u8..=255 {
+    for i in 0u8..128 {
+      vocab.insert(I::from_u64(i as u64 + start_idx), (i as char).to_string().to_word());
+    }
+    for i in 128u8..=255 {
       vocab.insert(I::from_u64(i as u64 + start_idx), i.to_word());
     }
     I::from_u64(start_idx + 256)
@@ -99,8 +106,8 @@ where
         let tp = (j1, j2);
         let merge = self.pre_merges.entry(tp).or_insert_with(|| {
           let content = (
-            self.vocab.get(&j1).unwrap().clone(),
-            self.vocab.get(&j2).unwrap().clone(),
+            self.vocab.get(&j1).ok_or_else(|| MyError::OovIdx(j1.to_u64())).unwrap().clone(),
+            self.vocab.get(&j2).ok_or_else(|| MyError::OovIdx(j2.to_u64())).unwrap().clone(),
           );
           Merge::new(tp, content)
         });
@@ -354,30 +361,31 @@ mod tests {
     assert_eq!(merges_txt, merges_expect_txt);
   }
 
-  // #[test]
-  // fn test_bpe_from_words_uni() {
-  //   const NAME: &str = "tinystories_sample_5M";
-  //   let spec = crate::spec::uni::UniSpec;
-  //   // const NAME: &str = "TinyStoriesV2-GPT4-train";
-  //   let input = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
-  //   let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
-  //   let mut bpe = BpeTrainer::<Character>::from_words(words, &vec!["<|endoftext|>".to_string()]);
-  //   bpe.init_training();
-  //   let vocab_size = match NAME {
-  //     "tinystories_sample_5M" => 2000,
-  //     _ => 10000,
-  //   };
-  //   while bpe.vocab.len() < vocab_size {
-  //     bpe.step().unwrap();
-  //     // let m = &bpe.merges.last().unwrap();
-  //     // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);
-  //   }
-  //   std::fs::create_dir_all("out").ok();
-  //   bpe.save_vocab_json(&spec, std::fs::File::create(format!("out/vocab.{NAME}.uni.json")).unwrap()).unwrap();
-  //   bpe.save_merges_txt(&spec, std::fs::File::create(format!("out/merges.{NAME}.uni.txt")).unwrap()).unwrap();
+  #[test]
+  fn test_bpe_from_words_uni() {
+    const NAME: &str = "tinystories_sample_5M";
+    // const NAME: &str = "TinyStoriesV2-GPT4-train";
+    // const NAME: &str = "TinyStories_all_data_zh_1M-sample";
+    let spec = crate::spec::uni::UniSpec;
+    let input = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
+    let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(words, &vec!["<|endoftext|>".to_string()]);
+    bpe.init_training();
+    let vocab_size = match NAME {
+      "tinystories_sample_5M" => 2000,
+      _ => 10000,
+    };
+    while bpe.vocab.len() < vocab_size {
+      bpe.step().unwrap();
+      // let m = &bpe.merges.last().unwrap();
+      // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);
+    }
+    std::fs::create_dir_all("out").ok();
+    bpe.save_vocab_json(&spec, std::fs::File::create(format!("out/vocab.{NAME}.uni.json")).unwrap()).unwrap();
+    bpe.save_merges_txt(&spec, std::fs::File::create(format!("out/merges.{NAME}.uni.txt")).unwrap()).unwrap();
 
-  //   let merges_txt = std::fs::read_to_string(format!("out/merges.{NAME}.uni.txt")).unwrap();
-  //   let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.uni.txt")).unwrap();
-  //   assert_eq!(merges_txt, merges_expect_txt);
-  // }
+    let merges_txt = std::fs::read_to_string(format!("out/merges.{NAME}.uni.txt")).unwrap();
+    // let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.uni.txt")).unwrap();
+    // assert_eq!(merges_txt, merges_expect_txt);
+  }
 }

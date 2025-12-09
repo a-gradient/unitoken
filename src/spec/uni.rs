@@ -4,34 +4,34 @@ use fancy_regex::Regex;
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
 
-use crate::{MyError, MyResult, bpe::{Character, Idx, Merge, Word}, spec::{Spec, WordDisplay}};
+use crate::{MyError, MyResult, bpe::{Character, IdxLike, Merge, Word}, spec::{Spec, WordDisplay}};
 
 pub struct UniSpec;
 
-impl<C: Ord> Spec<C, Idx> for UniSpec
+impl<C: Ord, I: IdxLike> Spec<C, I> for UniSpec
 where
   Self: WordDisplay<C>,
 {
-  fn encode_vocab(&self, w: &mut dyn std::io::Write, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<()> {
+  fn encode_vocab(&self, w: &mut dyn std::io::Write, vocab: &BTreeMap<I, Word<C>>) -> MyResult<()> {
     let mut map = OrderMap::new();
     for (idx, word) in vocab.iter() {
       let s = self.word_display(word);
-      map.insert(s, idx);
+      map.insert(s, idx.to_u64());
     }
     let json = serde_json::to_string_pretty(&map).unwrap();
     write!(w, "{}", json)?;
     Ok(())
   }
 
-  fn decode_vocab(&self, r: &mut dyn std::io::Read) -> MyResult<BTreeMap<Idx, Word<C>>> {
-    let map: OrderMap<String, Idx> = serde_json::from_reader(BufReader::new(r))?;
+  fn decode_vocab(&self, r: &mut dyn std::io::Read) -> MyResult<BTreeMap<I, Word<C>>> {
+    let map: OrderMap<String, u64> = serde_json::from_reader(BufReader::new(r))?;
     map.into_iter().map(|(s, idx)| {
       let word = self.word_parse(&s)?;
-      Ok((idx, word))
+      Ok((I::from_u64(idx), word))
     }).collect()
   }
 
-  fn encode_merges(&self, w: &mut dyn std::io::Write, merges: &Vec<Merge<C, Idx>>) -> MyResult<()> {
+  fn encode_merges(&self, w: &mut dyn std::io::Write, merges: &Vec<Merge<C, I>>) -> MyResult<()> {
     for merge in merges.iter() {
       let left = self.word_display(&merge.content.0);
       let right = self.word_display(&merge.content.1);
@@ -40,12 +40,12 @@ where
     Ok(())
   }
 
-  fn decode_merges(&self, reader: &mut dyn std::io::Read, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
+  fn decode_merges(&self, reader: &mut dyn std::io::Read, vocab: &BTreeMap<I, Word<C>>) -> MyResult<Vec<Merge<C, I>>> {
     let mut result = Vec::new();
     let mut input = String::new();
     reader.read_to_string(&mut input)?;
     let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
-    let get_kv = |vocab: &BTreeMap<Word<C>, Idx>, s: &str| -> MyResult<(Idx, Word<C>)> {
+    let get_kv = |vocab: &BTreeMap<Word<C>, I>, s: &str| -> MyResult<(I, Word<C>)> {
       let w = self.word_parse(s)?;
       Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(self.word_display(&w)))?, w))
     };

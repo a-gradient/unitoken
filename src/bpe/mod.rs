@@ -20,6 +20,12 @@ pub enum Character {
   Byte(u8),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CharIdx {
+  Idx(Idx),
+  Char(char),
+}
+
 #[derive(Debug)]
 pub struct PreToken<C, I> {
   pub src: Word<C>,
@@ -126,5 +132,47 @@ impl IdxLike for Idx {
   }
   fn to_u64(self) -> u64 {
     self as u64
+  }
+}
+impl IdxLike for CharIdx {
+  fn from_u64(v: u64) -> Self {
+    CharIdx::Idx(v as Idx)
+  }
+  fn to_u64(self) -> u64 {
+    match self {
+      CharIdx::Idx(i) => i as u64,
+      CharIdx::Char(c) => unimplemented!("Cannot convert CharIdx::Char to u64: {:?} [u{:04x}]", c, c as u32),
+    }
+  }
+}
+
+pub trait CharToIdx<I: IdxLike> {
+  fn char_to_idx(&self, start: u64) -> I;
+}
+impl CharToIdx<Idx> for u8 {
+  fn char_to_idx(&self, start: u64) -> Idx {
+    (*self as u64 + start) as Idx
+  }
+}
+impl CharToIdx<CharIdx> for char {
+  fn char_to_idx(&self, start: u64) -> CharIdx {
+    if self.is_ascii() {
+      CharIdx::Idx(*self as u8 as Idx + start as Idx)
+    } else {
+      CharIdx::Char(*self)
+    }
+  }
+}
+impl CharToIdx<CharIdx> for u8 {
+  fn char_to_idx(&self, start: u64) -> CharIdx {
+    CharIdx::Idx((*self as u64 + start) as Idx)
+  }
+}
+impl CharToIdx<CharIdx> for Character {
+  fn char_to_idx(&self, start: u64) -> CharIdx {
+    match self {
+      Character::Unicode(c) => c.char_to_idx(start),
+      Character::Byte(b) => b.char_to_idx(start),
+    }
   }
 }

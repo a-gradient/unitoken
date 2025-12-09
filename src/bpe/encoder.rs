@@ -97,8 +97,8 @@ where
       .collect();
     let pre_merge_map = merges.iter().copied().enumerate().map(|(i, (tp, target))| {
       let mut merge = Merge::new(tp, (
-        vocab.get(&tp.0).ok_or_else(|| MyError::OovIdx(tp.0)).cloned()?,
-        vocab.get(&tp.1).ok_or_else(|| MyError::OovIdx(tp.1)).cloned()?,
+        vocab.get(&tp.0).ok_or_else(|| MyError::OovIdx(tp.0.to_u64())).cloned()?,
+        vocab.get(&tp.1).ok_or_else(|| MyError::OovIdx(tp.1.to_u64())).cloned()?,
       )).with_target(target);
       merge.add(0, -(i as Freq));
       Ok((tp, merge))

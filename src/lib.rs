@@ -24,7 +24,7 @@ pub enum MyError {
   #[error("Out of vocabulary: {0}")]
   Oov(String),
   #[error("Out of vocabulary idx: {0}")]
-  OovIdx(u32),
+  OovIdx(u64),
   #[error("Out of vocabulary bytes: {0}")]
   OovBytes(String),
   #[error("Arrow error: {0}")]
