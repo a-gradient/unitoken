@@ -2,6 +2,7 @@
 extern crate tracing;
 
 use clap::{Parser, Subcommand};
+use indicatif::ProgressBar;
 use rgb::Rgb;
 use std::{
   collections::BTreeMap, fs, path::{Path, PathBuf}
@@ -44,6 +45,14 @@ impl Commands {
       Commands::Train(args) => &args.out_dir,
       Commands::Encode(args) => &args.out_dir,
       Commands::Plot(args) => &args.out_dir,
+    }
+  }
+
+  fn input_file(&self) -> &PathBuf {
+    match self {
+      Commands::Train(args) => &args.input_file,
+      Commands::Encode(args) => &args.input_file,
+      Commands::Plot(args) => &args.input_file,
     }
   }
 }
@@ -120,14 +129,19 @@ fn train_bpe<P: AsRef<Path>>(
   );
 
   let mut bpe = BpeTrainer::from_words(words, special_tokens);
-  let start_vocab_idx = bpe.start_vocab_idx.load(std::sync::atomic::Ordering::Acquire) as usize;
+  let start_vocab_idx = bpe.vocab.len();
   bpe.init_training();
+
+  let bar = ProgressBar::new(vocab_size as u64);
+  bar.set_position(start_vocab_idx as u64);
   for i in start_vocab_idx..vocab_size as usize {
     if bpe.step().is_none() {
       warn!(vocab_size=i, "No more merges can be made, stopping training early");
       break;
     }
+    bar.inc(1);
   }
+  bar.finish();
   bpe._metrics();
 
   let vocab_filename = format!("vocab.{file_stem}.json");
@@ -174,9 +188,28 @@ fn main() {
     _ => tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init(),
   }
   let metrics_dir =  cli.command.out_dir().join(".metrics");
+  let name = cli.command.input_file().file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("noname")
+    .to_string();
   if !matches!(cli.command, Commands::Plot(_)) {
     _metrics::init_metrics().expect("Failed to initialize metrics recorder");
   }
+  std::thread::spawn({
+    let metrics_snapshot_file = metrics_dir.join(format!("metrics_snapshot-[{}]-tmp.json", name));
+    move || loop {
+      std::thread::sleep(std::time::Duration::from_secs(30));
+      let snapshot = _metrics::capture_metrics_snapshot(false);
+      let Ok(file) = std::fs::File::create(&metrics_snapshot_file) else {
+        warn!("Failed to create metrics snapshot file: {}", metrics_snapshot_file.display());
+        continue;
+      };
+      serde_json::to_writer_pretty(
+        file,
+        &snapshot,
+      ).ok();
+    }
+  });
   debug!("Verbosity level: {}", verbose);
   match cli.command {
     Commands::Train(train_args) => {
@@ -199,9 +232,9 @@ fn main() {
   }
   info!("Done!");
   debug!("Capturing metrics snapshot...");
-  let snapshot = _metrics::capture_metrics_snapshot();
+  let snapshot = _metrics::capture_metrics_snapshot(true);
   fs::create_dir_all(&metrics_dir).expect("Failed to create metrics directory");
-  let metrics_snapshot_file = metrics_dir.join(format!("metrics_snapshot-{}.json", chrono::Utc::now().timestamp_millis()));
+  let metrics_snapshot_file = metrics_dir.join(format!("metrics_snapshot-[{}]-{}.json", name, chrono::Utc::now().timestamp_millis()));
   serde_json::to_writer_pretty(
     std::fs::File::create(&metrics_snapshot_file).expect("Failed to create metrics snapshot file"),
     &snapshot,

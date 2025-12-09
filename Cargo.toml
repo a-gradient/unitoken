@@ -20,6 +20,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 chrono = "0.4.42"
 textplots = "0.8.7"
 rgb = "0.8.52"
+indicatif = "0.18.3"
 
 [profile.dev.package."*"]
 opt-level = 2

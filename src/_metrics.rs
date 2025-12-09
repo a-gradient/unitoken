@@ -163,9 +163,9 @@ pub struct MetricsSnapshot {
 }
 
 #[must_use]
-pub fn capture_metrics_snapshot() -> MetricsSnapshot {
+pub fn capture_metrics_snapshot(clear: bool) -> MetricsSnapshot {
   let store = global_store();
-  fn block_snapshot<T: Copy>(block: &mut Block<T>, started_at: std::time::Instant) -> BlockSnapshot<T> {
+  fn block_snapshot<T: Copy>(block: &mut Block<T>, started_at: std::time::Instant, clear: bool) -> BlockSnapshot<T> {
     let mut values = Vec::new();
     let mut timestamps = Vec::new();
     for frame in &block.frames {
@@ -173,7 +173,9 @@ pub fn capture_metrics_snapshot() -> MetricsSnapshot {
       let elapsed = frame.timestamp.duration_since(started_at).as_secs_f64();
       timestamps.push(elapsed);
     }
-    block.frames.clear();
+    if clear {
+      block.frames.clear();
+    }
     BlockSnapshot {
       values,
       timestamps,
@@ -183,21 +185,21 @@ pub fn capture_metrics_snapshot() -> MetricsSnapshot {
     .iter_mut()
     .filter(|(_, block)| !block.frames.is_empty())
     .map(|(key, block)| {
-      (key.clone(), block_snapshot(block, store.started_at))
+      (key.clone(), block_snapshot(block, store.started_at, clear))
     })
     .collect();
   let gauges = store.gauges.lock().unwrap()
     .iter_mut()
     .filter(|(_, block)| !block.frames.is_empty())
     .map(|(key, block)| {
-      (key.clone(), block_snapshot(block, store.started_at))
+      (key.clone(), block_snapshot(block, store.started_at, clear))
     })
     .collect();
   let histograms = store.histograms.lock().unwrap()
     .iter_mut()
     .filter(|(_, block)| !block.frames.is_empty())
     .map(|(key, block)| {
-      (key.clone(), block_snapshot(block, store.started_at))
+      (key.clone(), block_snapshot(block, store.started_at, clear))
     })
     .collect();
   MetricsSnapshot {
