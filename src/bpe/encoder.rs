@@ -1,29 +1,27 @@
-use std::{
-  collections::{BTreeMap, HashMap},
-  fs::File,
-  io::{Read as _, Seek as _},
-  path::Path,
-};
+use std::collections::{BTreeMap, HashMap};
 
+use fancy_regex::Regex;
 use moka::sync::Cache;
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, split_special_tokens},
+  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens},
 };
 
 use super::*;
 
+#[derive(Clone)]
 pub struct BpeEncoder<C = u8> {
   pub vocab_bytes: BTreeMap<C, Idx>,
   pub vocab_rev: BTreeMap<Word<C>, Idx>,
   pub vocab: BTreeMap<Idx, Word<C>>,
   pub special_tokens: BTreeMap<String, Idx>,
+  pub re_special_tokens: Regex,
   pub merges: Vec<((Idx, Idx), Idx)>,
   /// with freq represents rank, or `merge.data.freq=-i` for i-th merge.
   /// with [`occurs_in={0}`](MergeData::occurs_in), in order to handle first word in [`Self::_encode_word`].
   pub pre_merge_map: HashMap<(Idx, Idx), Merge<C, Idx>>,
-  pub cache: Cache<Word<C>, Word<Idx>>,
+  pub cache: Cache<String, Word<Idx>>,
 }
 
 impl BpeEncoder<u8> {
@@ -100,6 +98,7 @@ where
       merge.add(0, -(i as Freq));
       Ok((tp, merge))
     }).collect::<MyResult<_>>()?;
+    let re_special_tokens = create_special_token_regex(&special_tokens);
     let special_tokens = special_tokens.into_iter().map(|s| {
       let w = s.to_word();
       let idx = *vocab_rev.get(&w).ok_or_else(|| MyError::Oov(w.display()))?;
@@ -113,6 +112,7 @@ where
       merges,
       pre_merge_map,
       special_tokens,
+      re_special_tokens,
       cache: Cache::new(max_cap),
     })
   }
@@ -172,25 +172,29 @@ where
     Ok(words.into_iter().map(|i| i.idxs.to_word()).collect())
   }
 
-  pub fn encode_words(&self, input: &[Word<C>]) -> MyResult<Vec<Word<Idx>>> {
+  pub fn encode_words<S: AsRef<str>, I: IntoIterator<Item = S>>(&self, input: I) -> MyResult<Vec<Word<Idx>>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
     let mut results = BTreeMap::new();
     let mut to_encode = Vec::new();
     let mut query = Vec::new();
-    input.iter().enumerate().for_each(|(i, w)| {
+    let input_len = input.into_iter().enumerate().map(|(i, w)| {
+      let w = w.as_ref();
       if let Some(cached) = self.cache.get(w) {
         results.insert(i, cached);
       } else {
-        to_encode.push(w.clone());
-        query.push(i);
+        to_encode.push(w.to_word());
+        query.push((i, w.to_string()));
       }
-    });
+    }).count();
     let encoded = self._encode_words(&to_encode)?;
-    for (i, (w, e)) in query.into_iter().zip(to_encode.into_iter().zip(encoded.into_iter())) {
-      self.cache.insert(w.clone(), e.clone());
+    for ((i, w), (_, e)) in query.into_iter().zip(to_encode.into_iter().zip(encoded.into_iter())) {
+      self.cache.insert(w, e.clone());
       results.insert(i, e);
     }
     let final_results = results.values().cloned().collect::<Vec<_>>();
-    assert_eq!(final_results.len(), input.len());
+    assert_eq!(final_results.len(), input_len);
     Ok(final_results)
   }
 
@@ -224,41 +228,34 @@ where
     Ok(words.into_iter().next().unwrap().idxs.to_word())
   }
 
-  pub fn encode_word(&self, input: &Word<C>) -> MyResult<Word<Idx>> {
-    if let Some(result) = self.cache.get(input) {
-      return Ok(result);
-    }
-    let result = self._encode_word(input)?;
-    self.cache.insert(input.clone(), result.clone());
-    Ok(result)
-  }
-
-  fn _encode_segment<P: AsRef<Path>>(
-    path: P, special_tokens: &Vec<String>, offset: u64, len: usize, cache: &HashMap<Arc<[C]>, Arc<[Idx]>>,
-  ) -> MyResult<Vec<Arc<[Idx]>>>
+  pub fn encode_word(&self, input: &str) -> MyResult<Word<Idx>>
   where
     for<'a> &'a str: ToWord<C>,
   {
-    let mut file = File::open(&path)?;
-    file.seek(std::io::SeekFrom::Start(offset))?;
-    let mut buffer = vec![0; len];
-    file.read_exact(&mut buffer)?;
+    if let Some(result) = self.cache.get(input) {
+      return Ok(result);
+    }
+    let result = self._encode_word(&input.to_word())?;
+    self.cache.insert(input.to_string(), result.clone());
+    Ok(result)
+  }
 
-    let content = String::from_utf8_lossy(&buffer);
-    let parts = split_special_tokens(&content, &special_tokens)?;
+  fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
+    let parts = split_special_tokens(&input, &self.re_special_tokens)?;
     let mut res = Vec::new();
-    for (part, is_special) in parts.iter() {
-      if *is_special {
-        let w = part.to_word();
-        let idxs = cache.get(&w).ok_or_else(|| MyError::Oov(w.display()))?;
-        res.push(idxs.clone());
+    for part in parts.iter() {
+      if part.is_special() {
+        let idx = *self.special_tokens.get(part.as_str()).ok_or_else(|| MyError::Oov(part.as_str().to_string()))?;
+        res.push(idx);
       } else {
-        pretokenizer_tokens(part, &RE)?
+        pretokenizer_tokens(part.as_str(), &RE)?
           .iter()
           .try_for_each(|token| -> MyResult<()> {
-            let w = token.to_word();
-            let idxs = cache.get(&w).ok_or(MyError::Oov(w.display()))?;
-            res.push(idxs.clone());
+            let idxs = self.encode_word(&token)?;
+            res.extend_from_slice(&idxs);
             Ok(())
           })?;
       }
@@ -267,34 +264,62 @@ where
   }
 
   fn _create_cache_from_words(
-    &self, input: Vec<Word<C>>, special_tokens: &Vec<String>
-  ) -> MyResult<HashMap<Arc<[C]>, Arc<[Idx]>>>
+    &self, input: Vec<String>
+  ) -> MyResult<OrderMap<String, Arc<[Idx]>>>
   where
     for<'a> &'a str: ToWord<C>,
   {
-    let encoded = self._encode_words(&input)?;
-    let mut cache = HashMap::from_iter(input.into_iter().zip(encoded.into_iter()).map(|(k, v)| (k, v)));
-    special_tokens.iter().try_for_each(|token| -> MyResult<()> {
+    let words = input.iter().map(|s| s.to_word()).collect::<Vec<_>>();
+    let encoded = self._encode_words(&words)?;
+    let mut cache = OrderMap::from_iter(input.into_iter().zip(encoded.into_iter()).rev().map(|(k, v)| (k, v)));
+    self.special_tokens.keys().try_for_each(|token| -> MyResult<()> {
       let w = token.to_word();
       let idx = *self.vocab_rev.get(&w).ok_or(MyError::Oov(w.display()))?;
       let encoded_special = vec![idx].to_word();
-      cache.insert(w, encoded_special);
+      cache.insert(token.to_string(), encoded_special);
       Ok(())
     })?;
     Ok(cache)
   }
 
-  pub fn encode_file<P: AsRef<std::path::Path>>(
-    &self, path: P, num_chunks: u32, special_tokens: Vec<String>, split_special_token: Option<&str>,
-  ) -> MyResult<Vec<Word<Idx>>>
+  pub fn _split_special_token(&self) -> Option<&str> {
+    self.special_tokens.iter().min_by_key(|(_, v)| *v).map(|(k, _)| k.as_str())
+  }
+
+  pub fn with_cache(mut self, cache: OrderMap<String, Arc<[Idx]>>) -> Self
   where
     for<'a> &'a str: ToWord<C>,
   {
-    let words = get_words_from_file(&path, num_chunks, special_tokens.clone(), split_special_token)?;
-    let input = words.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<Arc<[C]>>>();
-    let cache = self._create_cache_from_words(input, &special_tokens)?;
+    let max_cap = cache.len() as u64 * 3 / 2;
+    self.cache = Cache::new(max_cap);
+    for (k, v) in cache {
+      self.cache.insert(k, v);
+    }
+    self
+  }
 
-    let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
+  pub fn encode_file_with_cache<P: AsRef<std::path::Path>>(
+    &self, path: P, num_chunks: u32,
+  ) -> MyResult<Vec<Idx>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
+    let split_special_token = self._split_special_token();
+    let words = get_words_from_file(&path, num_chunks, self.re_special_tokens.clone(), split_special_token)?;
+    let input = words.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
+    let cache = self._create_cache_from_words(input)?;
+    let bpe_with_cache = self.clone().with_cache(cache);
+    bpe_with_cache._encode_file(path, num_chunks)
+  }
+
+  pub fn _encode_file<P: AsRef<std::path::Path>>(
+    &self, path: P, num_chunks: u32
+  ) -> MyResult<Vec<Idx>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
+    // TODO: handle this
+    let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
     let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
     let path = path.as_ref().to_path_buf();
     let params = boundaries
@@ -305,8 +330,10 @@ where
       .collect::<Vec<_>>();
     let mut segment_results = params
       .into_iter()
-      .map(|(index, offset, len)| -> MyResult<(usize, Vec<Word<Idx>>)> {
-        let segment_result =  Self::_encode_segment(&path, &special_tokens, offset, len, &cache)?;
+      .map(|(index, offset, len)| {
+        let buffer = read_file_to_buffer(&path, offset, len)?;
+        let content = String::from_utf8_lossy(&buffer);
+        let segment_result =  self.encode_string(&content)?;
         Ok((index, segment_result))
       })
       .collect::<MyResult<Vec<_>>>()?;
@@ -349,8 +376,8 @@ mod tests {
   #[test]
   fn test_cache() {
     const NAME: &str = "tinystories_sample_5M";
-    let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap()).unwrap();
-    let input = input.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<_>>();
+    let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap()).unwrap();
+    let input = input.iter().map(|(k, _)| k).collect::<Vec<_>>();
     let mut bpe = _setup_bpe(NAME);
     bpe.cache = Cache::new(input.len() as u64 * 6 / 5);
     let result1 = bpe.encode_words(&input).unwrap();
@@ -363,14 +390,12 @@ mod tests {
   fn test_bpe_encode_file() {
     const NAME: &str = "tinystories_sample_5M";
     let bpe = _setup_bpe(NAME);
-    let result = bpe.encode_file(
+    let result = bpe.encode_file_with_cache(
       format!("fixtures/{NAME}.txt"),
       1,
-      vec!["<|endoftext|>".to_string()],
-      None,
     ).unwrap();
-    assert!(result.len() == 1269588);
-    let total_index: usize = result.iter().map(|idxs| idxs.len()).sum();
-    assert!(total_index == 1424324);
+    // assert!(result.len() == 1269588);
+    // let total_index: usize = result.iter().map(|idxs| idxs.len()).sum();
+    assert!(result.len() == 1424324);
   }
 }

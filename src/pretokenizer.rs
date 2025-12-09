@@ -94,54 +94,78 @@ pub fn find_chunk_boundaries<P: AsRef<Path>>(
   Ok(deduplicated_boundaries.into_iter().collect())
 }
 
-pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Vec<String>) -> MyResult<Vec<(&'a str, bool)>> {
-  if special_tokens.is_empty() {
-    return Ok(vec![(text, false)]);
+pub enum SplitChunk<'a> {
+  Special(&'a str),
+  Chunk(&'a str),
+}
+
+impl SplitChunk<'_> {
+  pub fn as_str(&self) -> &str {
+    match self {
+      SplitChunk::Special(s) => s,
+      SplitChunk::Chunk(s) => s,
+    }
   }
 
+  pub fn is_special(&self) -> bool {
+    matches!(self, SplitChunk::Special(_))
+  }
+}
+
+pub fn create_special_token_regex(special_tokens: &[String]) -> Regex {
+  if special_tokens.is_empty() {
+    return Regex::new("$^").unwrap(); // matches nothing
+  }
   let pattern = special_tokens
     .iter()
     .map(|s| fancy_regex::escape(s).into_owned())
     .collect::<Vec<String>>()
     .join("|");
-  let re = Regex::new(&pattern).unwrap();
+  Regex::new(&pattern).unwrap()
+}
 
+pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Regex) -> MyResult<Vec<SplitChunk<'a>>> {
   let mut parts = Vec::new();
   let mut last_pos = 0;
-  for mat in re.find_iter(text) {
+  for mat in special_tokens.find_iter(text) {
     match mat {
       Ok(m) => {
         if m.start() > last_pos {
-          parts.push((&text[last_pos..m.start()], false));
+          parts.push(SplitChunk::Chunk(&text[last_pos..m.start()]));
         }
-        parts.push((&text[m.start()..m.end()], true));
+        parts.push(SplitChunk::Special(&text[m.start()..m.end()]));
         last_pos = m.end();
       }
       Err(e) => return Err(MyError::Regex(e)),
     }
   }
   if last_pos < text.len() {
-    parts.push((&text[last_pos..], false));
+    parts.push(SplitChunk::Chunk(&text[last_pos..]));
   }
   Ok(parts)
 }
 
-pub fn get_words_from_segment<P: AsRef<Path>>(
-  path: P, special_tokens: &Vec<String>, offset: u64, len: usize,
-) -> MyResult<BTreeMap<String, Freq>> {
-  let _span = trace_span!("get_words_from_segment", offset = offset, len = len).entered();
-
-  metrics::counter!("get_words_from_segment.calls").increment(1);
+pub fn read_file_to_buffer<P: AsRef<Path>>(path: P, offset: u64, len: usize) -> MyResult<Vec<u8>> {
   let mut file = File::open(&path)?;
   file.seek(std::io::SeekFrom::Start(offset))?;
   let mut buffer = vec![0; len];
   file.read_exact(&mut buffer)?;
+  Ok(buffer)
+}
+
+pub fn get_words_from_segment<P: AsRef<Path>>(
+  path: P, re_special_tokens: &Regex, offset: u64, len: usize,
+) -> MyResult<BTreeMap<String, Freq>> {
+  let _span = trace_span!("get_words_from_segment", offset = offset, len = len).entered();
+
+  metrics::counter!("get_words_from_segment.calls").increment(1);
+  let buffer = read_file_to_buffer(&path, offset, len)?;
 
   let content = String::from_utf8_lossy(&buffer);
-  let parts = split_special_tokens(&content, &special_tokens)?;
+  let parts = split_special_tokens(&content, &re_special_tokens)?;
   let mut words = BTreeMap::new();
-  for (part, _) in parts.iter().filter(|(_, is_special)| !is_special) {
-    for (token, count) in pretokenizer_counter(part, &RE)? {
+  for part in parts.iter().filter(|i| !i.is_special()) {
+    for (token, count) in pretokenizer_counter(part.as_str(), &RE)? {
       *words.entry(token).or_default() += count;
     }
   }
@@ -153,7 +177,7 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
 }
 
 pub fn get_words_from_file<P: AsRef<Path>>(
-  path: P, num_chunks: u32, special_tokens: Vec<String>, split_special_token: Option<&str>,
+  path: P, num_chunks: u32, re_special_tokens: Regex, split_special_token: Option<&str>,
 ) -> MyResult<BTreeMap<String, Freq>> {
   let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
   let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
@@ -163,9 +187,10 @@ pub fn get_words_from_file<P: AsRef<Path>>(
     .zip(boundaries.iter().skip(1))
     .map(|(start, end)| (*start, (*end - *start) as usize))
     .collect::<Vec<_>>();
+
   let words = params
     .into_par_iter()
-    .map(|(offset, len)| get_words_from_segment(&path, &special_tokens, offset, len))
+    .map(|(offset, len)| get_words_from_segment(&path, &re_special_tokens.clone(), offset, len))
     .try_reduce(
       || BTreeMap::new(),
       |mut a, b| {
@@ -261,7 +286,7 @@ mod tests {
     let words = get_words_from_file(
       path,
       num_chunks,
-      vec!["<|endoftext|>".to_string()],
+      create_special_token_regex(&["<|endoftext|>".to_string()]),
       Some("<|endoftext|>"),
     )
     .unwrap();
@@ -283,7 +308,7 @@ mod tests {
     let text = std::fs::read_to_string(&path).unwrap();
     let parts = split_special_tokens(
       &text,
-      &vec!["<|endoftext|>".to_string()],
+      &create_special_token_regex(&["<|endoftext|>".to_string()]),
     ).unwrap();
     assert!(parts.len() == 12915);
   }

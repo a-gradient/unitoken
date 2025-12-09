@@ -10,7 +10,7 @@ use std::{
 
 use unitoken::{
   bpe::BpeTrainer,
-  pretokenizer::{get_words_from_file, save_words, sort_words},
+  pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words},
 };
 
 mod _metrics;
@@ -102,7 +102,8 @@ fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chu
   }
   let split_special_token = special_tokens.get(0).cloned();
 
-  let words = get_words_from_file(&input, num_chunks, special_tokens, split_special_token.as_deref()).unwrap();
+  let re_special_tokens = create_special_token_regex(&special_tokens);
+  let words = get_words_from_file(&input, num_chunks, re_special_tokens, split_special_token.as_deref()).unwrap();
 
   debug!("Sort words");
   let sorted_words = sort_words(&words);
