@@ -103,8 +103,11 @@ fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chu
 
   let words = get_words_from_file(&input, num_chunks, special_tokens, split_special_token.as_deref()).unwrap();
 
+  debug!("Sort words");
+  let sorted_words = sort_words(&words);
+  debug!("Save words to {}", output.as_ref().display());
   let words_file = fs::File::create(output).unwrap();
-  save_words(words_file, &sort_words(&words)).unwrap();
+  save_words(words_file, &sorted_words).unwrap();
   words
 }
 
@@ -121,6 +124,7 @@ fn train_bpe<P: AsRef<Path>>(
     .expect("Failed to convert file stem to str");
   // use first special_token as split_special_token
 
+  info!("Pretokenizing input file...");
   let words = _pretokenize(
     out_dir.join(format!("_words.{file_stem}.json")),
     &path,
@@ -128,6 +132,7 @@ fn train_bpe<P: AsRef<Path>>(
     special_tokens.clone(),
   );
 
+  info!("Training BPE model...");
   let mut bpe = BpeTrainer::from_words(words, special_tokens);
   let start_vocab_idx = bpe.vocab.len();
   bpe.init_training();
@@ -144,6 +149,7 @@ fn train_bpe<P: AsRef<Path>>(
   bar.finish();
   bpe._metrics();
 
+  info!("Saving BPE model...");
   let vocab_filename = format!("vocab.{file_stem}.json");
   let merges_filename = format!("merges.{file_stem}.txt");
   let vocab_file = fs::File::create(out_dir.join(vocab_filename)).unwrap();
@@ -169,7 +175,6 @@ fn run_train(args: TrainArgs) {
   debug!("Number of chunks: {}", args.num_chunks);
   debug!("Input file: {}", args.input_file.display());
   debug!("Output directory: {}", args.out_dir.display());
-  info!("Training BPE model...");
   train_bpe(
     args.input_file,
     args.vocab_size,
