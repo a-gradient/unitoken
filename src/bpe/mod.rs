@@ -115,3 +115,16 @@ impl<C, I> Merge<C, I> {
 
 pub trait Cachable: std::hash::Hash + Send + Sync + 'static { }
 impl<C: std::hash::Hash + Send + Sync + 'static> Cachable for C { }
+
+pub trait IdxLike: Ord + std::hash::Hash + Eq + Copy + Send + Sync + 'static {
+  fn from_u64(v: u64) -> Self;
+  fn to_u64(self) -> u64;
+}
+impl IdxLike for Idx {
+  fn from_u64(v: u64) -> Self {
+    v as Self
+  }
+  fn to_u64(self) -> u64 {
+    self as u64
+  }
+}

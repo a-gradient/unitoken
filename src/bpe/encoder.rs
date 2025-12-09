@@ -356,8 +356,9 @@ mod tests {
   use super::*;
 
   fn _setup_bpe(name: &str) -> BpeEncoder<u8> {
-    let vocab = BpeEncoder::_load_vocab(&Gpt2Spec, std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
-    let merges = BpeEncoder::_load_merges(&Gpt2Spec, std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
+    let spec = Gpt2Spec;
+    let vocab = BpeEncoder::_load_vocab(&spec, std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
+    let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
     BpeEncoder::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap()
   }

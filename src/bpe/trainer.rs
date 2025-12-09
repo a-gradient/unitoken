@@ -5,29 +5,29 @@ use crate::{MyResult, spec::Spec};
 use super::*;
 
 #[derive(Debug, Default)]
-pub struct BpeTrainer<C = u8> {
+pub struct BpeTrainer<C, I> {
   pub start_vocab_idx: AtomicU64,
   pub special_tokens: Vec<String>,
-  pub vocab: BTreeMap<Idx, Word<C>>,
-  pub merges: Vec<Merge<C, Idx>>,
-  pub pre_merges: HashMap<(Idx, Idx), Merge<C, Idx>>,
-  pub words: Vec<PreToken<C, Idx>>,
+  pub vocab: BTreeMap<I, Word<C>>,
+  pub merges: Vec<Merge<C, I>>,
+  pub pre_merges: HashMap<(I, I), Merge<C, I>>,
+  pub words: Vec<PreToken<C, I>>,
 }
 
-impl<C: Clone> BpeTrainer<C>
+impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
 where
   Word<C>: WordDebugExt,
   u8: ToWord<C>,
   for<'a> &'a str: ToWord<C>,
 {
-  pub fn from_words<I: IntoIterator<Item = (String, Freq)>>(words: I, special_tokens: &[String]) -> Self {
-    let vocab_start_idx = special_tokens.len() as Idx;
+  pub fn from_words<Iter: IntoIterator<Item = (String, Freq)>>(words: Iter, special_tokens: &[String]) -> Self {
+    let vocab_start_idx = special_tokens.len() as u64;
     let mut tokens = Vec::new();
     for (w, freq) in words {
       if special_tokens.contains(&w) {
         continue;
       }
-      let idxs = w.bytes().map(|b| b as Idx + vocab_start_idx).collect::<Vec<_>>();
+      let idxs = w.bytes().map(|b| I::from_u64(b as u64 + vocab_start_idx)).collect::<Vec<_>>();
       let pre_token = PreToken {
         src: w.to_word(),
         idxs,
@@ -35,59 +35,59 @@ where
       };
       tokens.push(pre_token);
     }
-    let mut bpe = Self::new(tokens);
-    bpe._set_vocab_idx(0);
+    let mut bpe = Self::new(Default::default());
     bpe._vocab_insert_special_tokens(special_tokens);
     bpe._vocab_insert_all_single_byte();
+    bpe.words = tokens;
     bpe
   }
 
-  pub fn _vocab_insert_all_single_byte(&mut self) -> Idx {
-    let start_idx = self.start_vocab_idx.fetch_add(256, std::sync::atomic::Ordering::AcqRel) as Idx;
+  pub fn _vocab_insert_all_single_byte(&mut self) -> I {
+    let start_idx = self.start_vocab_idx.fetch_add(256, std::sync::atomic::Ordering::AcqRel);
     let vocab = &mut self.vocab;
     for i in 0u8..=255 {
-      vocab.insert(i as Idx + start_idx, i.to_word());
+      vocab.insert(I::from_u64(i as u64 + start_idx), i.to_word());
     }
-    start_idx + 256
+    I::from_u64(start_idx + 256)
   }
 }
 
-impl<C: Clone> BpeTrainer<C>
+impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
 where
   Word<C>: WordDebugExt,
   for<'a> &'a str: ToWord<C>,
 {
-  pub fn _vocab_insert_special_tokens(&mut self, special_tokens: &[String]) -> Idx {
+  pub fn _vocab_insert_special_tokens(&mut self, special_tokens: &[String]) -> I {
     let length = special_tokens.len();
-    let start_idx = self.start_vocab_idx.fetch_add(length as u64, std::sync::atomic::Ordering::AcqRel) as Idx;
+    let start_idx = self.start_vocab_idx.fetch_add(length as u64, std::sync::atomic::Ordering::AcqRel);
     let vocab = &mut self.vocab;
     for (i, token) in special_tokens.into_iter().enumerate() {
-      vocab.insert(i as Idx + start_idx, token.as_str().to_word());
+      vocab.insert(I::from_u64(i as u64 + start_idx), token.as_str().to_word());
     }
-    start_idx + length as Idx
+    I::from_u64(start_idx + length as u64)
   }
 
-  pub fn save_vocab_json<W: std::io::Write>(&self, spec: &dyn Spec<C, Idx>, mut w: W) -> MyResult<()> {
+  pub fn save_vocab_json<W: std::io::Write>(&self, spec: &dyn Spec<C, I>, mut w: W) -> MyResult<()> {
     spec.encode_vocab(&mut w, &self.vocab)
   }
 
-  pub fn save_merges_txt<W: std::io::Write>(&self, spec: &dyn Spec<C, Idx>, mut w: W) -> MyResult<()> {
+  pub fn save_merges_txt<W: std::io::Write>(&self, spec: &dyn Spec<C, I>, mut w: W) -> MyResult<()> {
     spec.encode_merges(&mut w, &self.merges)
   }
 }
 
-impl<C: Clone> BpeTrainer<C>
+impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
 where
   Word<C>: WordDebugExt
 {
-  pub fn new(words: Vec<PreToken<C, Idx>>) -> Self {
+  pub fn new(init_vocab: BTreeMap<I, Word<C>>) -> Self {
     Self {
-      start_vocab_idx: AtomicU64::new(0),
-      vocab: BTreeMap::new(),
+      start_vocab_idx: AtomicU64::new(init_vocab.len() as u64),
+      vocab: init_vocab,
       merges: Vec::new(),
       pre_merges: HashMap::new(),
       special_tokens: Vec::new(),
-      words,
+      words: Vec::new(),
     }
   }
 
@@ -110,23 +110,23 @@ where
     self._metrics();
   }
 
-  fn _set_vocab_idx(&mut self, start_idx: Idx) {
-    self.start_vocab_idx.store(start_idx as u64, std::sync::atomic::Ordering::Release);
+  fn _set_vocab_idx(&mut self, start_idx: I) {
+    self.start_vocab_idx.store(start_idx.to_u64(), std::sync::atomic::Ordering::Release);
   }
 
-  fn _add_vocab_idx(&self) -> Idx {
-    self.start_vocab_idx.fetch_add(1, std::sync::atomic::Ordering::AcqRel) as Idx
+  fn _add_vocab_idx(&self) -> I {
+    I::from_u64(self.start_vocab_idx.fetch_add(1, std::sync::atomic::Ordering::AcqRel))
   }
 
-  fn update_pre_merges(&mut self, merge: &Merge<C, Idx>, changes: BTreeMap<(Idx, Idx), MergeData>) {
+  fn update_pre_merges(&mut self, merge: &Merge<C, I>, changes: BTreeMap<(I, I), MergeData>) {
     _update_merge_map(&mut self.pre_merges, merge, changes, Some(&self.vocab));
   }
 
-  fn merge(&mut self, merge: &Merge<C, Idx>, target_idx: Idx) -> BTreeMap<(Idx, Idx), MergeData> {
+  fn merge(&mut self, merge: &Merge<C, I>, target_idx: I) -> BTreeMap<(I, I), MergeData> {
     _merge(&mut self.words, merge, target_idx)
   }
 
-  fn _get_largest_merge(&self) -> Option<Merge<C, Idx>> where C: Ord {
+  fn _get_largest_merge(&self) -> Option<Merge<C, I>> where C: Ord {
     self
       .pre_merges
       .values()
@@ -134,7 +134,7 @@ where
       .cloned()
   }
 
-  fn _get_largest_merge2(&self) -> Option<Merge<C, Idx>> where C: Ord + Send + Sync + 'static {
+  fn _get_largest_merge2(&self) -> Option<Merge<C, I>> where C: Ord + Send + Sync + 'static {
     use rayon::prelude::*;
     self
       .pre_merges
@@ -144,7 +144,7 @@ where
       .cloned()
   }
 
-  pub fn step(&mut self) -> Option<Idx> where C: Ord + Send + Sync + 'static {
+  pub fn step(&mut self) -> Option<I> where C: Ord + Send + Sync + 'static {
     // find the most frequent merge,
     // if the frequency is the same, choose the lexicographically largest one.
     let merge = if self.pre_merges.len() < 100_000 {
@@ -165,7 +165,7 @@ where
     metrics::histogram!("bpe_trainer.occurs_in").record(merge.data.occurs_in.len() as f64);
     metrics::histogram!("bpe_trainer.freq").record(merge.data.freq as f64);
     self.merges.push(merge);
-    if (target_idx + 1) % 100 == 0 {
+    if (target_idx.to_u64() + 1) % 100 == 0 {
       self._metrics();
     }
     Some(target_idx)
@@ -178,9 +178,14 @@ where
   {
     let merges = self.merges
       .into_iter()
-      .map(|m| (m.tp, m.target.unwrap()))
+      .map(|m| {
+        let tp = (m.tp.0.to_u64() as Idx, m.tp.1.to_u64() as Idx);
+        let target = m.target.unwrap().to_u64() as Idx;
+        (tp, target)
+      })
       .collect();
-    BpeEncoder::new(self.vocab, merges, self.special_tokens)
+    let vocab = self.vocab.into_iter().map(|(i, w)| (i.to_u64() as Idx, w)).collect();
+    BpeEncoder::new(vocab, merges, self.special_tokens)
   }
 
   pub fn _metrics(&self) {
@@ -195,7 +200,7 @@ where
 mod tests {
   use crate::spec::gpt2::Gpt2Spec;
 
-use super::*;
+  use super::*;
 
   fn _test_bpe_merge(pretokens: &[(&str, Freq)], merges: &[((&str, &str), Vec<(&str, &str, MergeData)>)]) {
     fn pretoken(s: &str, freq: Freq) -> PreToken<u8, Idx> {
@@ -206,7 +211,7 @@ use super::*;
         freq,
       }
     }
-    fn lookup(bpe: &BpeTrainer, s: &str) -> Option<Idx> {
+    fn lookup(bpe: &BpeTrainer<u8, Idx>, s: &str) -> Option<Idx> {
       bpe.vocab.iter().find_map(|(i, w)| {
         if w.as_ref() == s.as_bytes() {
           Some(*i)
@@ -215,7 +220,7 @@ use super::*;
         }
       })
     }
-    fn display(bpe: &BpeTrainer, changes: &BTreeMap<(u32, u32), MergeData>) -> String {
+    fn display(bpe: &BpeTrainer<u8, Idx>, changes: &BTreeMap<(Idx, Idx), MergeData>) -> String {
       let mut parts = Vec::new();
       let target = ("__target__").to_word();
       for (tp, data) in changes.iter() {
@@ -288,14 +293,16 @@ use super::*;
 
   #[test]
   fn test_bpe_step() {
-    let mut bpe = BpeTrainer::<u8>::from_words(vec![
+    let mut bpe = BpeTrainer::<u8, Idx>::from_words(vec![
       ("ababc".to_string(), 5),
       ("ababcbabc".to_string(), 30),
       ("abcbabcab".to_string(), 200),
     ], &vec![]);
+    assert!(bpe.words.len() > 0);
     bpe.init_training();
+    assert!(bpe.pre_merges.len() > 0);
     for _ in 0..3 {
-      bpe.step();
+      bpe.step().unwrap();
     }
     let result_vocab = bpe.vocab.into_iter().map(|(i, w)| (i, w.debug_display())).skip(256).collect::<Vec<_>>();
     assert_eq!(
@@ -346,4 +353,31 @@ use super::*;
     let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.txt")).unwrap();
     assert_eq!(merges_txt, merges_expect_txt);
   }
+
+  // #[test]
+  // fn test_bpe_from_words_uni() {
+  //   const NAME: &str = "tinystories_sample_5M";
+  //   let spec = crate::spec::uni::UniSpec;
+  //   // const NAME: &str = "TinyStoriesV2-GPT4-train";
+  //   let input = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
+  //   let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
+  //   let mut bpe = BpeTrainer::<Character>::from_words(words, &vec!["<|endoftext|>".to_string()]);
+  //   bpe.init_training();
+  //   let vocab_size = match NAME {
+  //     "tinystories_sample_5M" => 2000,
+  //     _ => 10000,
+  //   };
+  //   while bpe.vocab.len() < vocab_size {
+  //     bpe.step().unwrap();
+  //     // let m = &bpe.merges.last().unwrap();
+  //     // println!("{} {} => {}", _printable(&m.content.0), _printable(&m.content.1), m.data.freq);
+  //   }
+  //   std::fs::create_dir_all("out").ok();
+  //   bpe.save_vocab_json(&spec, std::fs::File::create(format!("out/vocab.{NAME}.uni.json")).unwrap()).unwrap();
+  //   bpe.save_merges_txt(&spec, std::fs::File::create(format!("out/merges.{NAME}.uni.txt")).unwrap()).unwrap();
+
+  //   let merges_txt = std::fs::read_to_string(format!("out/merges.{NAME}.uni.txt")).unwrap();
+  //   let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.uni.txt")).unwrap();
+  //   assert_eq!(merges_txt, merges_expect_txt);
+  // }
 }
