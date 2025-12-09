@@ -275,4 +275,16 @@ mod tests {
     let expected: OrderMap<String, Freq> = serde_json::from_str(&answer).unwrap();
     assert_eq!(words, expected);
   }
+
+  #[test]
+  fn test_split_special_tokens() {
+    const NAME: &str = "tinystories_sample_5M";
+    let path = format!("fixtures/{NAME}.txt");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let parts = split_special_tokens(
+      &text,
+      &vec!["<|endoftext|>".to_string()],
+    ).unwrap();
+    assert!(parts.len() == 12915);
+  }
 }

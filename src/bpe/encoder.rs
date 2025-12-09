@@ -227,6 +227,39 @@ where
     Ok(result)
   }
 
+  fn _encode_segment<P: AsRef<Path>>(
+    path: P, special_tokens: &Vec<String>, offset: u64, len: usize, cache: &HashMap<Arc<[C]>, Arc<[Idx]>>,
+  ) -> MyResult<Vec<Arc<[Idx]>>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
+    let mut file = File::open(&path)?;
+    file.seek(std::io::SeekFrom::Start(offset))?;
+    let mut buffer = vec![0; len];
+    file.read_exact(&mut buffer)?;
+
+    let content = String::from_utf8_lossy(&buffer);
+    let parts = split_special_tokens(&content, &special_tokens)?;
+    let mut res = Vec::new();
+    for (part, is_special) in parts.iter() {
+      if *is_special {
+        let w = part.to_word();
+        let idxs = cache.get(&w).ok_or_else(|| MyError::Oov(w.display()))?;
+        res.push(idxs.clone());
+      } else {
+        pretokenizer_tokens(part, &RE)?
+          .iter()
+          .try_for_each(|token| -> MyResult<()> {
+            let w = token.to_word();
+            let idxs = cache.get(&w).ok_or(MyError::Oov(w.display()))?;
+            res.push(idxs.clone());
+            Ok(())
+          })?;
+      }
+    }
+    return Ok(res);
+  }
+
   pub fn encode_file<P: AsRef<std::path::Path>>(
     &self, path: P, num_chunks: u32, special_tokens: Vec<String>, split_special_token: Option<&str>,
   ) -> MyResult<Vec<Word<Idx>>>
@@ -258,7 +291,7 @@ where
     let mut segment_results = params
       .into_iter()
       .map(|(index, offset, len)| -> MyResult<(usize, Vec<Word<Idx>>)> {
-        let segment_result =  _encode_segment(&path, &special_tokens, offset, len, &cache)?;
+        let segment_result =  Self::_encode_segment(&path, &special_tokens, offset, len, &cache)?;
         Ok((index, segment_result))
       })
       .collect::<MyResult<Vec<_>>>()?;
@@ -268,40 +301,7 @@ where
   }
 }
 
-fn _encode_segment<P: AsRef<Path>, C>(
-  path: P, special_tokens: &Vec<String>, offset: u64, len: usize, cache: &HashMap<Arc<[C]>, Arc<[Idx]>>,
-) -> MyResult<Vec<Arc<[Idx]>>>
-where
-  for<'a> &'a str: ToWord<C>,
-  C: std::hash::Hash + Eq + Clone,
-  Word<C>: WordExt,
-{
-  let mut file = File::open(&path)?;
-  file.seek(std::io::SeekFrom::Start(offset))?;
-  let mut buffer = vec![0; len];
-  file.read_exact(&mut buffer)?;
 
-  let content = String::from_utf8_lossy(&buffer);
-  let parts = split_special_tokens(&content, &special_tokens)?;
-  let mut res = Vec::new();
-  for (part, is_special) in parts.iter() {
-    if *is_special {
-      let w = part.to_word();
-      let idx = cache.get(&w).ok_or_else(|| MyError::Oov(w.display()))?;
-      res.push(idx.clone());
-    } else {
-      pretokenizer_tokens(part, &RE)?
-        .iter()
-        .try_for_each(|token| -> MyResult<()> {
-          let w = token.to_word();
-          let idx = cache.get(&w).ok_or(MyError::Oov(w.display()))?;
-          res.push(idx.clone());
-          Ok(())
-        })?;
-    }
-  }
-  return Ok(res);
-}
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -342,5 +342,24 @@ mod tests {
     let result2 = bpe.encode_words(&input).unwrap();
     assert_eq!(result1, result2);
     println!("input size: {}, cache size: {}", input.len(), bpe.cache.weighted_size())
+  }
+
+  #[test]
+  fn test_bpe_encode_file() {
+    const NAME: &str = "tinystories_sample_5M";
+    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{NAME}.json")).unwrap()).unwrap();
+    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{NAME}.txt")).unwrap(), &vocab).unwrap();
+    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
+    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    let bpe = BpeEncoder::new(vocab, merges);
+    let result = bpe.encode_file(
+      format!("fixtures/{NAME}.txt"),
+      1,
+      vec!["<|endoftext|>".to_string()],
+      None,
+    ).unwrap();
+    assert!(result.len() == 1269588);
+    let total_index: usize = result.iter().map(|idxs| idxs.len()).sum();
+    assert!(total_index == 1424324);
   }
 }
