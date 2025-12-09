@@ -152,6 +152,9 @@ fn _try_combine(word: &Word<u8>) -> Word<Character> {
       c = vec![b];
     }
   }
+  if !c.is_empty() {
+    chars.extend(convert_str(c));
+  }
   Arc::from(chars.into_boxed_slice())
 }
 
