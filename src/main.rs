@@ -9,7 +9,7 @@ use std::{
 };
 
 use unitoken::{
-  bpe::{BpeEncoder, BpeTrainer, encoder::save_idxs},
+  bpe::{BpeEncoder, BpeTrainer},
   pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words},
 };
 
