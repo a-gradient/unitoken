@@ -20,6 +20,8 @@ pub enum MyError {
   InvalidPrintableChar(char),
   #[error("Out of vocabulary: {0}")]
   Oov(String),
+  #[error("Out of vocabulary idx: {0}")]
+  OovIdx(u32),
   #[error("Out of vocabulary bytes: {0}")]
   OovBytes(String),
 }

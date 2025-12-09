@@ -1,10 +1,13 @@
 use std::{collections::{BTreeMap, HashMap}, sync::atomic::AtomicU64};
 
+use crate::MyResult;
+
 use super::*;
 
 #[derive(Debug, Default)]
 pub struct BpeTrainer<C = u8> {
   pub start_vocab_idx: AtomicU64,
+  pub special_tokens: Vec<String>,
   pub vocab: BTreeMap<Idx, Word<C>>,
   pub merges: Vec<Merge<C, Idx>>,
   pub pre_merges: HashMap<(Idx, Idx), Merge<C, Idx>>,
@@ -83,6 +86,7 @@ where
       vocab: BTreeMap::new(),
       merges: Vec::new(),
       pre_merges: HashMap::new(),
+      special_tokens: Vec::new(),
       words,
     }
   }
@@ -167,12 +171,16 @@ where
     Some(target_idx)
   }
 
-  pub fn finish(self) -> BpeEncoder<C> where C: Ord + Cachable {
+  pub fn finish(self) -> MyResult<BpeEncoder<C>>
+  where
+    C: Ord + Cachable,
+    for<'a> &'a str: ToWord<C>,
+  {
     let merges = self.merges
       .into_iter()
       .map(|m| (m.tp, m.target.unwrap()))
       .collect();
-    BpeEncoder::new(self.vocab, merges)
+    BpeEncoder::new(self.vocab, merges, self.special_tokens)
   }
 
   pub fn _metrics(&self) {

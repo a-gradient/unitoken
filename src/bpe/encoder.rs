@@ -18,6 +18,7 @@ pub struct BpeEncoder<C = u8> {
   pub vocab_bytes: BTreeMap<C, Idx>,
   pub vocab_rev: BTreeMap<Word<C>, Idx>,
   pub vocab: BTreeMap<Idx, Word<C>>,
+  pub special_tokens: BTreeMap<String, Idx>,
   pub merges: Vec<((Idx, Idx), Idx)>,
   /// with freq represents rank, or `merge.data.freq=-i` for i-th merge.
   /// with [`occurs_in={0}`](MergeData::occurs_in), in order to handle first word in [`Self::_encode_word`].
@@ -73,13 +74,14 @@ impl BpeEncoder<u8> {
 
 impl<C: Ord + Clone + Cachable> BpeEncoder<C>
 where
-  Word<C>: WordExt
+  Word<C>: WordExt,
+  for<'a> &'a str: ToWord<C>,
 {
-  pub fn new(vocab: BTreeMap<Idx, Word<C>>, merges: Vec<((Idx, Idx), Idx)>) -> Self {
+  pub fn new(vocab: BTreeMap<Idx, Word<C>>, merges: Vec<((Idx, Idx), Idx)>, special_tokens: Vec<String>) -> MyResult<Self> {
     let vocab_rev = vocab
       .iter()
       .map(|(k, v)| (v.clone(), *k))
-      .collect();
+      .collect::<BTreeMap<_, _>>();
     let vocab_bytes = vocab
       .iter()
       .filter_map(|(k, v)| {
@@ -92,21 +94,27 @@ where
       .collect();
     let pre_merge_map = merges.iter().copied().enumerate().map(|(i, (tp, target))| {
       let mut merge = Merge::new(tp, (
-        vocab.get(&tp.0).unwrap().clone(),
-        vocab.get(&tp.1).unwrap().clone(),
+        vocab.get(&tp.0).ok_or_else(|| MyError::OovIdx(tp.0)).cloned()?,
+        vocab.get(&tp.1).ok_or_else(|| MyError::OovIdx(tp.1)).cloned()?,
       )).with_target(target);
       merge.add(0, -(i as Freq));
-      (tp, merge)
-    }).collect::<HashMap<_, _>>();
+      Ok((tp, merge))
+    }).collect::<MyResult<_>>()?;
+    let special_tokens = special_tokens.into_iter().map(|s| {
+      let w = s.to_word();
+      let idx = *vocab_rev.get(&w).ok_or_else(|| MyError::Oov(w.display()))?;
+      Ok((s, idx))
+    }).collect::<MyResult<_>>()?;
     let max_cap = vocab.len() as u64 * 3 / 2;
-    Self {
+    Ok(Self {
       vocab_bytes,
       vocab_rev,
       vocab,
       merges,
       pre_merge_map,
+      special_tokens,
       cache: Cache::new(max_cap),
-    }
+    })
   }
 
   pub fn _pretoken(&self, word: Word<C>, freq: Freq) -> MyResult<PreToken<C, Idx>> {
@@ -318,7 +326,7 @@ mod tests {
     let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
     let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    BpeEncoder::new(vocab, merges)
+    BpeEncoder::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap()
   }
 
   #[test]
