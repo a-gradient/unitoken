@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, btree_map};
+use std::collections::{BTreeMap, HashMap, hash_map};
 
 use lazy_static::lazy_static;
 use super::*;
@@ -159,9 +159,9 @@ where
   changes
 }
 
-pub(crate) fn _update_merge_map<C, I>(merge_map: &mut BTreeMap<(I, I), Merge<C, I>>, merge: &Merge<C, I>, changes: BTreeMap<(I, I), MergeData>, vocab: Option<&BTreeMap<I, Word<C>>>)
+pub(crate) fn _update_merge_map<C, I>(merge_map: &mut HashMap<(I, I), Merge<C, I>>, merge: &Merge<C, I>, changes: BTreeMap<(I, I), MergeData>, vocab: Option<&BTreeMap<I, Word<C>>>)
 where
-  I: Ord + Copy,
+  I: Ord + std::hash::Hash + Eq + Copy,
   C: Clone,
   Word<C>: WordExt,
 {
@@ -174,8 +174,8 @@ where
     }
     let entry = merge_map.entry(tp);
     let entry = match entry {
-      btree_map::Entry::Occupied(e) => e.into_mut(),
-      btree_map::Entry::Vacant(e) => {
+      hash_map::Entry::Occupied(e) => e.into_mut(),
+      hash_map::Entry::Vacant(e) => {
         if let Some(vocab) = vocab {
           let content = (
             vocab.get(&tp.0).unwrap().clone(),

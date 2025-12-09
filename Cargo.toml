@@ -28,3 +28,8 @@ opt-level = 2
 [profile.test]
 inherits = "release"
 debug = true
+
+[profile.release]
+# 'line-tables-only' is a good balance between file size and profiling detail
+debug = "line-tables-only"
+# RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use moka::sync::Cache;
 
@@ -13,7 +13,7 @@ pub struct BpeEncoder<C = u8> {
   pub merges: Vec<((Idx, Idx), Idx)>,
   /// with freq represents rank, or `merge.data.freq=-i` for i-th merge.
   /// with [`occurs_in={0}`](MergeData::occurs_in), in order to handle first word in [`Self::_encode_word`].
-  pub pre_merge_map: BTreeMap<(Idx, Idx), Merge<C, Idx>>,
+  pub pre_merge_map: HashMap<(Idx, Idx), Merge<C, Idx>>,
   pub cache: Cache<Word<C>, Word<Idx>>,
 }
 
@@ -89,7 +89,7 @@ where
       )).with_target(target);
       merge.add(0, -(i as Freq));
       (tp, merge)
-    }).collect::<BTreeMap<_, _>>();
+    }).collect::<HashMap<_, _>>();
     let max_cap = vocab.len() as u64 * 3 / 2;
     Self {
       vocab_bytes,
@@ -108,7 +108,7 @@ where
     Ok(PreToken { src: word, idxs, freq })
   }
 
-  fn _new_pre_merge_map(&self) -> BTreeMap<(Idx, Idx), Merge<C, Idx>> {
+  fn _new_pre_merge_map(&self) -> HashMap<(Idx, Idx), Merge<C, Idx>> {
     let mut pre_merges = self.pre_merge_map.clone();
     pre_merges.iter_mut().for_each(|i| {
       i.1.data.freq = 0;

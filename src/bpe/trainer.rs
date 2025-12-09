@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::atomic::AtomicU64};
+use std::{collections::{BTreeMap, HashMap}, sync::atomic::AtomicU64};
 
 use super::*;
 
@@ -7,7 +7,7 @@ pub struct BpeTrainer<C = u8> {
   pub start_vocab_idx: AtomicU64,
   pub vocab: BTreeMap<Idx, Word<C>>,
   pub merges: Vec<Merge<C, Idx>>,
-  pub pre_merges: BTreeMap<(Idx, Idx), Merge<C, Idx>>,
+  pub pre_merges: HashMap<(Idx, Idx), Merge<C, Idx>>,
   pub words: Vec<PreToken<C, Idx>>,
 }
 
@@ -82,7 +82,7 @@ where
       start_vocab_idx: AtomicU64::new(0),
       vocab: BTreeMap::new(),
       merges: Vec::new(),
-      pre_merges: BTreeMap::new(),
+      pre_merges: HashMap::new(),
       words,
     }
   }
@@ -126,7 +126,7 @@ where
     self
       .pre_merges
       .values()
-      .max_by_key(|m| (m.data.freq, m.content.clone()))
+      .max_by_key(|m| (m.data.freq, &m.content))
       .cloned()
   }
 
