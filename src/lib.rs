@@ -19,6 +19,8 @@ pub enum MyError {
   Utf8(#[from] std::str::Utf8Error),
   #[error("Character not in printable set: {0}")]
   InvalidPrintableChar(char),
+  #[error("Character not in printable set: {0}")]
+  InvalidPrintableEscape(String),
   #[error("Out of vocabulary: {0}")]
   Oov(String),
   #[error("Out of vocabulary idx: {0}")]

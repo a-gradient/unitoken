@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::{MyResult, bpe::{Merge, Word}};
 
 pub mod gpt2;
+pub mod uni;
 
 pub trait Spec<Idx, Char> {
   fn encode_vocab<W: std::io::Write>(&self, w: W, vocab: &BTreeMap<Idx, Word<Char>>) -> MyResult<()>;
