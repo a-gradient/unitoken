@@ -2,6 +2,7 @@
 extern crate tracing;
 
 use clap::{Parser, Subcommand};
+use rgb::Rgb;
 use std::{
   collections::BTreeMap, fs, path::{Path, PathBuf}
 };
@@ -114,9 +115,7 @@ fn train_bpe<P: AsRef<Path>>(
       break;
     }
   }
-  metrics::gauge!("bpe_trainer.pre_merges_count").set(bpe.pre_merges.len() as f64);
-  metrics::gauge!("bpe_trainer.words_count").set(bpe.words.len() as f64);
-  metrics::gauge!("bpe_trainer.vocab_size").set(bpe.vocab.len() as f64);
+  bpe._metrics();
 
   let vocab_filename = format!("vocab.{file_stem}.json");
   let merges_filename = format!("merges.{file_stem}.txt");
@@ -178,7 +177,62 @@ fn main() {
   fs::create_dir_all(&metrics_dir).expect("Failed to create metrics directory");
   let metrics_snapshot_file = metrics_dir.join(format!("metrics_snapshot-{}.json", chrono::Utc::now().timestamp_millis()));
   serde_json::to_writer_pretty(
-    std::fs::File::create(metrics_snapshot_file).expect("Failed to create metrics snapshot file"),
+    std::fs::File::create(&metrics_snapshot_file).expect("Failed to create metrics snapshot file"),
     &snapshot,
   ).ok();
+  debug!("Metrics snapshot saved to {}", metrics_snapshot_file.display());
+  plot_metrics(&snapshot);
+}
+
+fn plot_metrics(metrics: &_metrics::MetricsSnapshot) {
+  use textplots::*;
+  for (name, block) in &metrics.gauges {
+    let data = block.timestamps.iter().zip(&block.values).map(|(i, v)| (*i as f32, *v as f32)).collect::<Vec<_>>();
+    if data.is_empty() {
+      continue;
+    }
+    let x_max = data.last().unwrap().0 + 0.1;
+    let x_min = data.first().unwrap().0 - 0.1;
+    println!("{} [{}] {:?}", name, data.len(), data.first());
+    let rgb = Rgb::new(255, 255, 0);
+    Chart::new(120, 30, x_min, x_max)
+      .linecolorplot(&Shape::Lines(&data), rgb)
+      .display();
+  }
+  for (name, block) in &metrics.counters {
+    let data = block.timestamps.iter().zip(&block.values).map(|(i, v)| (*i as f32, *v as f32)).collect::<Vec<_>>();
+    if data.is_empty() {
+      continue;
+    }
+    let x_max = data.last().unwrap().0 + 0.1;
+    let x_min = data.first().unwrap().0 - 0.1;
+    println!("{} [{}] {:?}", name, data.len(), data.first());
+    let rgb = Rgb::new(255, 255, 0);
+    Chart::new(120, 30, x_min, x_max)
+      .linecolorplot(&Shape::Lines(&data), rgb)
+      .display();
+  }
+  for (name, block) in &metrics.histograms {
+    let data = block.timestamps.iter().zip(&block.values).map(|(i, v)| (*i as f32, *v as f32)).collect::<Vec<_>>();
+    if data.is_empty() {
+      continue;
+    }
+    let y_min = data.iter().map(|(_, v)| *v).fold(f32::INFINITY, f32::min);
+    let y_max = data.iter().map(|(_, v)| *v).fold(f32::NEG_INFINITY, f32::max) + 1e-6;
+    let mut bin_y = vec![0.0; 50];
+    let bin_x = bin_y.iter().enumerate().map(|(i, _)| {
+      let bin_center = y_min + (i as f32 + 0.5) / (bin_y.len() as f32) * (y_max - y_min);
+      bin_center
+    }).collect::<Vec<_>>();
+    data.iter().for_each(|&(_, i)| {
+      let bin_idx = ((i - y_min) / (y_max - y_min) * (bin_y.len() as f32)) as usize;
+      if bin_idx < bin_y.len() {
+        bin_y[bin_idx] += 1.0;
+      }
+    });
+    println!("{} [{}] {:?}", name, data.len(), data.first());
+    Chart::new(120, 30, y_min, y_max)
+      .lineplot(&Shape::Bars(&bin_x.into_iter().zip(bin_y).collect::<Vec<_>>()))
+      .display();
+  }
 }

@@ -158,10 +158,10 @@ where
     BpeEncoder::new(self.vocab, merges)
   }
 
-  fn _metrics(&self) {
+  pub fn _metrics(&self) {
+    metrics::counter!("bpe_trainer.vocab_size").absolute(self.vocab.len() as u64);
     metrics::gauge!("bpe_trainer.pre_merges_count").set(self.pre_merges.len() as f64);
     metrics::gauge!("bpe_trainer.words_count").set(self.words.len() as f64);
-    metrics::gauge!("bpe_trainer.vocab_size").set(self.vocab.len() as f64);
   }
 }
 
