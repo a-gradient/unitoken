@@ -155,8 +155,11 @@ where
     let merged_word = merge.merged_content();
     self.vocab.insert(target_idx, merged_word);
     assert_eq!(-changes.get(&merge.tp).map(|i| i.freq).unwrap_or(0), merge.data.freq);
+    metrics::histogram!("bpe_trainer.changes").record(changes.len() as f64);
     self.update_pre_merges(&merge, changes);
     self.pre_merges.remove(&merge.tp);
+    metrics::histogram!("bpe_trainer.occurs_in").record(merge.data.occurs_in.len() as f64);
+    metrics::histogram!("bpe_trainer.freq").record(merge.data.freq as f64);
     self.merges.push(merge);
     if (target_idx + 1) % 100 == 0 {
       self._metrics();

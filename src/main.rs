@@ -281,8 +281,12 @@ fn plot_metrics(metrics: &_metrics::MetricsSnapshot) {
     if data.is_empty() {
       continue;
     }
-    let y_min = data.iter().map(|(_, v)| *v).fold(f32::INFINITY, f32::min);
-    let y_max = data.iter().map(|(_, v)| *v).fold(f32::NEG_INFINITY, f32::max) + 1e-6;
+    let y_mean = data.iter().map(|(_, v)| *v).sum::<f32>() / (data.len() as f32);
+    let y_min_true = data.iter().map(|(_, v)| *v).fold(f32::INFINITY, f32::min);
+    let y_max_true = data.iter().map(|(_, v)| *v).fold(f32::NEG_INFINITY, f32::max) + 1e-6;
+    let y_delta = f32::min(y_mean - y_min_true, y_max_true - y_mean);
+    let y_min = f32::max(y_min_true, y_mean - y_delta);
+    let y_max = f32::min(y_max_true, y_mean + y_delta);
     let mut bin_y = vec![0.0; 50];
     let bin_x = bin_y.iter().enumerate().map(|(i, _)| {
       let bin_center = y_min + (i as f32 + 0.5) / (bin_y.len() as f32) * (y_max - y_min);
@@ -294,7 +298,7 @@ fn plot_metrics(metrics: &_metrics::MetricsSnapshot) {
         bin_y[bin_idx] += 1.0;
       }
     });
-    println!("{} [{}] {:?}", name, data.len(), data.first());
+    println!("{} [{}] {:?}", name, data.len(), (y_min_true, y_mean, y_max_true));
     Chart::new(120, 30, y_min, y_max)
       .lineplot(&Shape::Bars(&bin_x.into_iter().zip(bin_y).collect::<Vec<_>>()))
       .display();
