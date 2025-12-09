@@ -14,7 +14,12 @@ pub struct BpeTrainer<C = u8> {
   pub words: Vec<PreToken<C, Idx>>,
 }
 
-impl BpeTrainer<u8> {
+impl<C: Clone> BpeTrainer<C>
+where
+  Word<C>: WordDebugExt,
+  u8: ToWord<C>,
+  for<'a> &'a str: ToWord<C>,
+{
   pub fn from_words<I: IntoIterator<Item = (String, Freq)>>(words: I, special_tokens: &[String]) -> Self {
     let vocab_start_idx = special_tokens.len() as Idx;
     let mut tokens = Vec::new();
@@ -30,7 +35,7 @@ impl BpeTrainer<u8> {
       };
       tokens.push(pre_token);
     }
-    let mut bpe = BpeTrainer::new(tokens);
+    let mut bpe = Self::new(tokens);
     bpe._set_vocab_idx(0);
     bpe._vocab_insert_special_tokens(special_tokens);
     bpe._vocab_insert_all_single_byte();
@@ -41,7 +46,7 @@ impl BpeTrainer<u8> {
     let start_idx = self.start_vocab_idx.fetch_add(256, std::sync::atomic::Ordering::AcqRel) as Idx;
     let vocab = &mut self.vocab;
     for i in 0u8..=255 {
-      vocab.insert(i as Idx + start_idx, [i].to_word());
+      vocab.insert(i as Idx + start_idx, i.to_word());
     }
     start_idx + 256
   }
@@ -283,7 +288,7 @@ use super::*;
 
   #[test]
   fn test_bpe_step() {
-    let mut bpe = BpeTrainer::from_words(vec![
+    let mut bpe = BpeTrainer::<u8>::from_words(vec![
       ("ababc".to_string(), 5),
       ("ababcbabc".to_string(), 30),
       ("abcbabcab".to_string(), 200),

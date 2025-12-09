@@ -210,7 +210,7 @@ fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_to
   let idxs = bpe.encode_file_with_cache(&path, num_chunks).expect("encode file");
 
   info!("Saving BPE idxs...");
-  BpeEncoder::save_idxs(out_file, idxs).expect("save idxs");
+  bpe.save_idxs(out_file, idxs).expect("save idxs");
 }
 
 

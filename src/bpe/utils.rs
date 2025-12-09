@@ -26,6 +26,31 @@ impl ToWord<u8> for &str {
   }
 }
 
+impl ToWord<Character> for &str {
+  fn to_word(self) -> Word<Character> {
+    let chars = self.chars().map(|ch| Character::Unicode(ch)).collect::<Vec<_>>();
+    Arc::from(chars.into_boxed_slice())
+  }
+}
+
+impl ToWord<u8> for u8 {
+  fn to_word(self) -> Word<u8> {
+    Arc::from(vec![self].into_boxed_slice())
+  }
+}
+
+impl ToWord<Character> for u8 {
+  fn to_word(self) -> Word<Character> {
+    Arc::from(vec![Character::Byte(self)].into_boxed_slice())
+  }
+}
+
+impl ToWord<Character> for char {
+  fn to_word(self) -> Word<Character> {
+    Arc::from(vec![Character::Unicode(self)].into_boxed_slice())
+  }
+}
+
 pub trait WordDebugExt {
   fn debug_display(&self) -> String;
 }

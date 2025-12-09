@@ -58,7 +58,7 @@ where
     Ok(special_tokens)
   }
 
-  pub fn save_idxs<P: AsRef<Path>>(file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
+  pub fn save_idxs<P: AsRef<Path>>(&self, file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
     let field = arrow::datatypes::Field::new("idx", arrow::datatypes::DataType::UInt32, false);
     let schema = Arc::new(arrow::datatypes::Schema::new(vec![field]));
     let array = arrow::array::UInt32Array::from(idxs);
