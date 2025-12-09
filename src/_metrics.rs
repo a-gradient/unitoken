@@ -1,6 +1,7 @@
-use std::{collections::HashMap, sync::{Arc, Mutex, OnceLock}};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use metrics::{Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Recorder, SetRecorderError};
+use ordermap::OrderMap;
 
 pub struct Frame<T> {
   value: T,
@@ -24,9 +25,9 @@ struct Block<T> {
 
 struct GlobalStore {
   started_at: std::time::Instant,
-  counters: Mutex<HashMap<String, Block<u64>>>,
-  gauges: Mutex<HashMap<String, Block<f64>>>,
-  histograms: Mutex<HashMap<String, Block<f64>>>,
+  counters: Mutex<OrderMap<String, Block<u64>>>,
+  gauges: Mutex<OrderMap<String, Block<f64>>>,
+  histograms: Mutex<OrderMap<String, Block<f64>>>,
 }
 
 static GLOBAL_STORE: OnceLock<Arc<GlobalStore>> = OnceLock::new();
@@ -35,9 +36,9 @@ fn global_store() -> &'static Arc<GlobalStore> {
   GLOBAL_STORE.get_or_init(|| {
     Arc::new(GlobalStore {
       started_at: std::time::Instant::now(),
-      counters: Mutex::new(HashMap::new()),
-      gauges: Mutex::new(HashMap::new()),
-      histograms: Mutex::new(HashMap::new()),
+      counters: Mutex::new(OrderMap::new()),
+      gauges: Mutex::new(OrderMap::new()),
+      histograms: Mutex::new(OrderMap::new()),
     })
   })
 }
@@ -156,15 +157,14 @@ pub struct BlockSnapshot<T> {
 
 #[derive(serde::Serialize)]
 pub struct MetricsSnapshot {
-  pub counters: HashMap<String, BlockSnapshot<u64>>,
-  pub gauges: HashMap<String, BlockSnapshot<f64>>,
-  pub histograms: HashMap<String, BlockSnapshot<f64>>,
+  pub counters: OrderMap<String, BlockSnapshot<u64>>,
+  pub gauges: OrderMap<String, BlockSnapshot<f64>>,
+  pub histograms: OrderMap<String, BlockSnapshot<f64>>,
 }
 
 #[must_use]
 pub fn capture_metrics_snapshot() -> MetricsSnapshot {
   let store = global_store();
-  let mut counters = HashMap::new();
   fn block_snapshot<T: Copy>(block: &mut Block<T>, started_at: std::time::Instant) -> BlockSnapshot<T> {
     let mut values = Vec::new();
     let mut timestamps = Vec::new();
@@ -179,44 +179,27 @@ pub fn capture_metrics_snapshot() -> MetricsSnapshot {
       timestamps,
     }
   }
-  {
-    let mut map = store.counters.lock().unwrap();
-    for (key, block) in map.iter_mut() {
-      if block.frames.is_empty() {
-        continue;
-      }
-      counters.insert(
-        key.clone(),
-        block_snapshot(block, store.started_at),
-      );
-    }
-  }
-  let mut gauges = HashMap::new();
-  {
-    let mut map = store.gauges.lock().unwrap();
-    for (key, block) in map.iter_mut() {
-      if block.frames.is_empty() {
-        continue;
-      }
-      gauges.insert(
-        key.clone(),
-        block_snapshot(block, store.started_at)
-      );
-    }
-  }
-  let mut histograms = HashMap::new();
-  {
-    let mut map = store.histograms.lock().unwrap();
-    for (key, block) in map.iter_mut() {
-      if block.frames.is_empty() {
-        continue;
-      }
-      histograms.insert(
-        key.clone(),
-        block_snapshot(block, store.started_at)
-      );
-    }
-  }
+  let counters = store.counters.lock().unwrap()
+    .iter_mut()
+    .filter(|(_, block)| !block.frames.is_empty())
+    .map(|(key, block)| {
+      (key.clone(), block_snapshot(block, store.started_at))
+    })
+    .collect();
+  let gauges = store.gauges.lock().unwrap()
+    .iter_mut()
+    .filter(|(_, block)| !block.frames.is_empty())
+    .map(|(key, block)| {
+      (key.clone(), block_snapshot(block, store.started_at))
+    })
+    .collect();
+  let histograms = store.histograms.lock().unwrap()
+    .iter_mut()
+    .filter(|(_, block)| !block.frames.is_empty())
+    .map(|(key, block)| {
+      (key.clone(), block_snapshot(block, store.started_at))
+    })
+    .collect();
   MetricsSnapshot {
     counters,
     gauges,

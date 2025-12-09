@@ -103,6 +103,7 @@ where
         merge.add(i as u64, word.freq);
       }
     }
+    self._metrics();
   }
 
   fn _set_vocab_idx(&mut self, start_idx: Idx) {
@@ -143,6 +144,9 @@ where
     self.update_pre_merges(&merge, changes);
     self.pre_merges.remove(&merge.tp);
     self.merges.push(merge);
+    if (target_idx + 1) % 100 == 0 {
+      self._metrics();
+    }
     Some(target_idx)
   }
 
@@ -152,6 +156,12 @@ where
       .map(|m| (m.tp, m.target.unwrap()))
       .collect();
     BpeEncoder::new(self.vocab, merges)
+  }
+
+  fn _metrics(&self) {
+    metrics::gauge!("bpe_trainer.pre_merges_count").set(self.pre_merges.len() as f64);
+    metrics::gauge!("bpe_trainer.words_count").set(self.words.len() as f64);
+    metrics::gauge!("bpe_trainer.vocab_size").set(self.vocab.len() as f64);
   }
 }
 

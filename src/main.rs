@@ -35,6 +35,13 @@ impl Commands {
       Commands::Encode(args) => args.verbose,
     }
   }
+
+  fn out_dir(&self) -> &PathBuf {
+    match self {
+      Commands::Train(args) => &args.out_dir,
+      Commands::Encode(args) => &args.out_dir,
+    }
+  }
 }
 
 #[derive(Parser)]
@@ -107,6 +114,9 @@ fn train_bpe<P: AsRef<Path>>(
       break;
     }
   }
+  metrics::gauge!("bpe_trainer.pre_merges_count").set(bpe.pre_merges.len() as f64);
+  metrics::gauge!("bpe_trainer.words_count").set(bpe.words.len() as f64);
+  metrics::gauge!("bpe_trainer.vocab_size").set(bpe.vocab.len() as f64);
 
   let vocab_filename = format!("vocab.{file_stem}.json");
   let merges_filename = format!("merges.{file_stem}.txt");
@@ -151,6 +161,7 @@ fn main() {
     1 => tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init(),
     _ => tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init(),
   }
+  let metrics_dir = cli.command.out_dir().join(".metrics");
   _metrics::init_metrics().expect("Failed to initialize metrics recorder");
   debug!("Verbosity level: {}", verbose);
   match cli.command {
@@ -161,9 +172,13 @@ fn main() {
       unimplemented!("Encode command is not implemented yet");
     }
   }
+  info!("Done!");
+  debug!("Capturing metrics snapshot...");
   let snapshot = _metrics::capture_metrics_snapshot();
+  fs::create_dir_all(&metrics_dir).expect("Failed to create metrics directory");
+  let metrics_snapshot_file = metrics_dir.join(format!("metrics_snapshot-{}.json", chrono::Utc::now().timestamp_millis()));
   serde_json::to_writer_pretty(
-    std::fs::File::create("out/.metrics_snapshot.json").expect("Failed to create metrics snapshot file"),
+    std::fs::File::create(metrics_snapshot_file).expect("Failed to create metrics snapshot file"),
     &snapshot,
   ).ok();
 }
