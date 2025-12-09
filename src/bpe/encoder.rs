@@ -260,16 +260,13 @@ where
     return Ok(res);
   }
 
-  pub fn encode_file<P: AsRef<std::path::Path>>(
-    &self, path: P, num_chunks: u32, special_tokens: Vec<String>, split_special_token: Option<&str>,
-  ) -> MyResult<Vec<Word<Idx>>>
+  fn _create_cache_from_words(
+    &self, input: Vec<Word<C>>, special_tokens: &Vec<String>
+  ) -> MyResult<HashMap<Arc<[C]>, Arc<[Idx]>>>
   where
     for<'a> &'a str: ToWord<C>,
   {
-    let words = get_words_from_file(&path, num_chunks, special_tokens.clone(), split_special_token)?;
-    let input = words.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<Arc<[C]>>>();
     let encoded = self._encode_words(&input)?;
-
     let mut cache = HashMap::from_iter(input.into_iter().zip(encoded.into_iter()).map(|(k, v)| (k, v)));
     special_tokens.iter().try_for_each(|token| -> MyResult<()> {
       let w = token.to_word();
@@ -278,6 +275,18 @@ where
       cache.insert(w, encoded_special);
       Ok(())
     })?;
+    Ok(cache)
+  }
+
+  pub fn encode_file<P: AsRef<std::path::Path>>(
+    &self, path: P, num_chunks: u32, special_tokens: Vec<String>, split_special_token: Option<&str>,
+  ) -> MyResult<Vec<Word<Idx>>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
+    let words = get_words_from_file(&path, num_chunks, special_tokens.clone(), split_special_token)?;
+    let input = words.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<Arc<[C]>>>();
+    let cache = self._create_cache_from_words(input, &special_tokens)?;
 
     let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
     let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
