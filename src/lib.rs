@@ -24,6 +24,10 @@ pub enum MyError {
   OovIdx(u32),
   #[error("Out of vocabulary bytes: {0}")]
   OovBytes(String),
+  #[error("Arrow error: {0}")]
+  Arrow(#[from] arrow::error::ArrowError),
+  #[error("Parquet error: {0}")]
+  Parquet(#[from] parquet::errors::ParquetError),
 }
 
 pub type MyResult<T> = Result<T, MyError>;

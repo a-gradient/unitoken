@@ -9,7 +9,7 @@ use std::{
 };
 
 use unitoken::{
-  bpe::BpeTrainer,
+  bpe::{BpeEncoder, BpeTrainer, encoder::save_idxs},
   pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words},
 };
 
@@ -79,6 +79,12 @@ struct EncodeArgs {
   verbose: u8,
   #[arg(short, long = "out", default_value = "out")]
   out_dir: PathBuf,
+  #[arg(long = "vocab")]
+  vocab_name: Option<String>,
+  #[arg(short = 'c', long = "chunks", default_value = "1024")]
+  num_chunks: u32,
+  #[arg(long = "special-tokens")]
+  special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
   input_file: PathBuf,
 }
@@ -113,7 +119,7 @@ fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chu
   words
 }
 
-fn train_bpe<P: AsRef<Path>>(
+fn bpe_train<P: AsRef<Path>>(
   path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf,
 ) {
   fs::create_dir_all(out_dir).expect("Failed to create output directory");
@@ -161,6 +167,19 @@ fn train_bpe<P: AsRef<Path>>(
   bpe.save_merges_txt(merges_file).unwrap();
 }
 
+fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf) {
+  info!("Initializing BPE encoder...");
+  let bpe = BpeEncoder::new_from_file(vocab_path, merges_path, special_tokens.clone()).expect("create bpe encoder");
+
+  info!("Encoding file: {}", path.as_ref().display());
+  let idxs = bpe.encode_file_with_cache(&path, num_chunks).expect("encode file");
+
+  info!("Saving BPE idxs...");
+  save_idxs(out_file, idxs).expect("save idxs");
+}
+
+
+
 fn lines_of(s: &str) -> Vec<String> {
   s.lines().filter(|line| !line.is_empty()).map(|line| line.to_string()).collect()
 }
@@ -177,12 +196,49 @@ fn run_train(args: TrainArgs) {
   debug!("Number of chunks: {}", args.num_chunks);
   debug!("Input file: {}", args.input_file.display());
   debug!("Output directory: {}", args.out_dir.display());
-  train_bpe(
+  bpe_train(
     args.input_file,
     args.vocab_size,
     args.num_chunks,
     &special_tokens,
     &args.out_dir,
+  );
+}
+
+fn run_encode(args: EncodeArgs) {
+  let file_stem = args.input_file
+    .file_stem()
+    .expect("Failed to get file stem")
+    .to_str()
+    .expect("Failed to convert file stem to str");
+
+  let vocab_name = args.vocab_name.unwrap_or(file_stem.to_string());
+  let vocab_file = args.out_dir.join(format!("vocab.{vocab_name}.json"));
+  let merges_file = args.out_dir.join(format!("merges.{vocab_name}.txt"));
+  let out_file = args.out_dir.join(format!("idxs.{file_stem}.parquet"));
+
+  let special_tokens = if let Some(special_tokens_path) = args.special_tokens_path {
+      let content = fs::read_to_string(special_tokens_path).expect("Failed to read special tokens file");
+      lines_of(&content)
+    } else {
+      BpeEncoder::get_special_tokens_from_vocab(&vocab_file).expect("get special tokens from vocab file")
+    };
+
+  debug!("Input file: {}", args.input_file.display());
+  debug!("Vocabulary file: {}", vocab_file.display());
+  debug!("Merges file: {}", merges_file.display());
+  debug!("Output file: {}", out_file.display());
+  debug!("Number of chunks: {}", args.num_chunks);
+  debug!("Special tokens: {:?}", special_tokens);
+
+  // TODO read special tokens from vocab file
+  bpe_encode(
+    args.input_file,
+    vocab_file,
+    merges_file,
+    &lines_of(include_str!("../fixtures/default_special_tokens.txt")),
+    args.num_chunks,
+    &out_file,
   );
 }
 
@@ -222,8 +278,8 @@ fn main() {
     Commands::Train(train_args) => {
       run_train(train_args);
     }
-    Commands::Encode(_encode_args) => {
-      unimplemented!("Encode command is not implemented yet");
+    Commands::Encode(encode_args) => {
+      run_encode(encode_args);
     }
     Commands::Plot(plot_args) => {
       debug!("Plotting metrics...");

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{collections::{BTreeMap, HashMap}, io::BufReader, path::Path};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
@@ -26,7 +26,7 @@ pub struct BpeEncoder<C = u8> {
 
 impl BpeEncoder<u8> {
   fn _load_vocab<R: std::io::Read>(reader: R) -> MyResult<BTreeMap<Word<u8>, Idx>> {
-    let input: BTreeMap<String, u64> = serde_json::from_reader(reader)?;
+    let input: BTreeMap<String, u64> = serde_json::from_reader(BufReader::new(reader))?;
     input.into_iter().map(|(s, i)| {
       let w = _from_printable(&s).map_err(|e| MyError::InvalidPrintableChar(e))?;
       Ok((w, i as Idx))
@@ -67,6 +67,32 @@ impl BpeEncoder<u8> {
       result.push(merge);
     }
     Ok(result)
+  }
+
+  pub fn new_from_file<P: AsRef<std::path::Path>>(
+    vocab_path: P, merges_path: P, special_tokens: Vec<String>,
+  ) -> MyResult<Self> {
+    let vocab = Self::_load_vocab(std::fs::File::open(vocab_path)?)?;
+    let merges = Self::_load_merges(std::fs::File::open(merges_path)?, &vocab)?;
+    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
+    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    Self::new(vocab, merges, special_tokens)
+  }
+
+  pub fn get_special_tokens_from_vocab<P: AsRef<Path>>(vocab_path: P) -> MyResult<Vec<String>> {
+    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(vocab_path)?)?;
+    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect::<BTreeMap<_, _>>();
+    let mut special_tokens = Vec::new();
+    for index in 0..vocab.len() {
+      if let Some(token) = vocab.get(&(index as u32)) {
+        if token.len() > 1 {
+          special_tokens.push(token.display());
+        } else {
+          break;
+        }
+      }
+    }
+    Ok(special_tokens)
   }
 }
 
@@ -343,6 +369,23 @@ where
   }
 }
 
+
+pub fn save_idxs<P: AsRef<std::path::Path>>(file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
+  let field = arrow::datatypes::Field::new("idx", arrow::datatypes::DataType::UInt32, false);
+  let schema = Arc::new(arrow::datatypes::Schema::new(vec![field]));
+  let array = arrow::array::UInt32Array::from(idxs);
+  let batch = arrow::record_batch::RecordBatch::try_new(
+    schema.clone(),
+    vec![Arc::new(array)]
+  )?;
+  let file = std::fs::File::create(file_path)?;
+
+  let props = parquet::file::properties::WriterProperties::builder().build();
+  let mut writer = parquet::arrow::arrow_writer::ArrowWriter::try_new(file, schema, Some(props))?;
+  writer.write(&batch)?;
+  writer.close()?;
+  Ok(())
+}
 
 #[cfg(test)]
 mod tests {
