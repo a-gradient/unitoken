@@ -10,7 +10,7 @@ use std::{
 
 use unitoken::{
   bpe::{BpeEncoder, BpeTrainer},
-  pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words},
+  pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::gpt2::Gpt2Spec,
 };
 
 mod _metrics;
@@ -169,7 +169,7 @@ fn bpe_train<P: AsRef<Path>>(
 
 fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf) {
   info!("Initializing BPE encoder...");
-  let bpe = BpeEncoder::new_from_file(vocab_path, merges_path, special_tokens.clone()).expect("create bpe encoder");
+  let bpe = BpeEncoder::new_from_file(&Gpt2Spec, vocab_path, merges_path, special_tokens.clone()).expect("create bpe encoder");
 
   info!("Encoding file: {}", path.as_ref().display());
   let idxs = bpe.encode_file_with_cache(&path, num_chunks).expect("encode file");
@@ -221,7 +221,7 @@ fn run_encode(args: EncodeArgs) {
       let content = fs::read_to_string(special_tokens_path).expect("Failed to read special tokens file");
       lines_of(&content)
     } else {
-      BpeEncoder::get_special_tokens_from_vocab(&vocab_file).expect("get special tokens from vocab file")
+      BpeEncoder::get_special_tokens_from_vocab(&Gpt2Spec, &vocab_file).expect("get special tokens from vocab file")
     };
 
   debug!("Input file: {}", args.input_file.display());

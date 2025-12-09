@@ -5,7 +5,7 @@ use moka::sync::Cache;
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::{Spec, gpt2::Gpt2Spec},
+  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
 };
 
 use super::*;
@@ -24,26 +24,30 @@ pub struct BpeEncoder<C = u8> {
   pub cache: Cache<String, Word<Idx>>,
 }
 
-impl BpeEncoder<u8> {
-  fn _load_vocab<R: std::io::Read>(reader: R) -> MyResult<BTreeMap<Idx, Word<u8>>> {
-    Gpt2Spec.decode_vocab(reader)
+impl<C: Ord + Clone + Cachable> BpeEncoder<C>
+where
+  Word<C>: WordDebugExt,
+  for<'a> &'a str: ToWord<C>,
+{
+  fn _load_vocab<SPEC: Spec<Idx, C>, R: std::io::Read>(spec: &SPEC, reader: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
+    spec.decode_vocab(reader)
   }
 
-  fn _load_merges<R: std::io::Read>(mut reader: R, vocab: &BTreeMap<Idx, Word<u8>>) -> MyResult<Vec<Merge<u8, Idx>>> {
-    Gpt2Spec.decode_merges(&mut reader, vocab)
+  fn _load_merges<SPEC: Spec<Idx, C>, R: std::io::Read>(spec: &SPEC, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
+    spec.decode_merges(&mut reader, vocab)
   }
 
-  pub fn new_from_file<P: AsRef<std::path::Path>>(
-    vocab_path: P, merges_path: P, special_tokens: Vec<String>,
+  pub fn new_from_file<SPEC: Spec<Idx, C>, P: AsRef<std::path::Path>>(
+    spec: &SPEC, vocab_path: P, merges_path: P, special_tokens: Vec<String>,
   ) -> MyResult<Self> {
-    let vocab = Self::_load_vocab(std::fs::File::open(vocab_path)?)?;
-    let merges = Self::_load_merges(std::fs::File::open(merges_path)?, &vocab)?;
+    let vocab = Self::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
+    let merges = Self::_load_merges(spec, std::fs::File::open(merges_path)?, &vocab)?;
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
     Self::new(vocab, merges, special_tokens)
   }
 
-  pub fn get_special_tokens_from_vocab<P: AsRef<Path>>(vocab_path: P) -> MyResult<Vec<String>> {
-    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(vocab_path)?)?;
+  pub fn get_special_tokens_from_vocab<SPEC: Spec<Idx, C>, P: AsRef<Path>>(spec: &SPEC, vocab_path: P) -> MyResult<Vec<String>> {
+    let vocab = BpeEncoder::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
     let mut special_tokens = Vec::new();
     for index in 0..vocab.len() {
       match vocab.get(&(index as Idx)) {
@@ -347,11 +351,13 @@ where
 
 #[cfg(test)]
 mod tests {
+  use crate::spec::gpt2::Gpt2Spec;
+
   use super::*;
 
   fn _setup_bpe(name: &str) -> BpeEncoder<u8> {
-    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
-    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
+    let vocab = BpeEncoder::_load_vocab(&Gpt2Spec, std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
+    let merges = BpeEncoder::_load_merges(&Gpt2Spec, std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
     BpeEncoder::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap()
   }

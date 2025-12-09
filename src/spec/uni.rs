@@ -116,9 +116,7 @@ impl WordDisplay<u8> for UniSpec {
 fn _display_char(ch: &Character) -> String {
   match ch {
     Character::Unicode(' ') => '␣'.to_string(),
-    Character::Unicode('␣') => format!("{{u{:04x}}}", '␣' as u32),
-    Character::Unicode('{') => "{u007b}".to_string(),
-    Character::Unicode('}') => "{u007d}".to_string(),
+    Character::Unicode(c @ ('␣' | '{' | '}')) => format!("{{u{:04x}}}", *c as u32),
     Character::Unicode(c) => {
       c.to_string()
     }
@@ -200,10 +198,10 @@ mod tests {
   fn test_display_char() {
     assert_eq!(_display_char(&Character::Unicode('a')), "a".to_string());
     assert_eq!(_display_char(&Character::Unicode(' ')), "␣".to_string());
-    assert_eq!(_display_char(&Character::Unicode('␣')), "{00a0}".to_string());
-    assert_eq!(_display_char(&Character::Unicode('{')), "{007b}".to_string());
-    assert_eq!(_display_char(&Character::Unicode('}')), "{007d}".to_string());
-    assert_eq!(_display_char(&Character::Byte(0x41)), "{41}".to_string());
+    assert_eq!(_display_char(&Character::Unicode('␣')), "{u2423}".to_string());
+    assert_eq!(_display_char(&Character::Unicode('{')), "{u007b}".to_string());
+    assert_eq!(_display_char(&Character::Unicode('}')), "{u007d}".to_string());
+    assert_eq!(_display_char(&Character::Byte(0x41)), "{x41}".to_string());
   }
 
   #[test]
