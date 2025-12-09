@@ -27,6 +27,7 @@ struct Cli {
 enum Commands {
   Train(TrainArgs),
   Encode(EncodeArgs),
+  Plot(PlotArgs),
 }
 
 impl Commands {
@@ -34,6 +35,7 @@ impl Commands {
     match self {
       Commands::Train(args) => args.verbose,
       Commands::Encode(args) => args.verbose,
+      Commands::Plot(args) => args.verbose,
     }
   }
 
@@ -41,6 +43,7 @@ impl Commands {
     match self {
       Commands::Train(args) => &args.out_dir,
       Commands::Encode(args) => &args.out_dir,
+      Commands::Plot(args) => &args.out_dir,
     }
   }
 }
@@ -63,6 +66,16 @@ struct TrainArgs {
 
 #[derive(Parser)]
 struct EncodeArgs {
+  #[arg(short, long, action = clap::ArgAction::Count)]
+  verbose: u8,
+  #[arg(short, long = "out", default_value = "out")]
+  out_dir: PathBuf,
+  #[arg(value_parser = clap::value_parser!(PathBuf))]
+  input_file: PathBuf,
+}
+
+#[derive(Parser)]
+struct PlotArgs {
   #[arg(short, long, action = clap::ArgAction::Count)]
   verbose: u8,
   #[arg(short, long = "out", default_value = "out")]
@@ -160,8 +173,10 @@ fn main() {
     1 => tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init(),
     _ => tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init(),
   }
-  let metrics_dir = cli.command.out_dir().join(".metrics");
-  _metrics::init_metrics().expect("Failed to initialize metrics recorder");
+  let metrics_dir =  cli.command.out_dir().join(".metrics");
+  if !matches!(cli.command, Commands::Plot(_)) {
+    _metrics::init_metrics().expect("Failed to initialize metrics recorder");
+  }
   debug!("Verbosity level: {}", verbose);
   match cli.command {
     Commands::Train(train_args) => {
@@ -169,6 +184,17 @@ fn main() {
     }
     Commands::Encode(_encode_args) => {
       unimplemented!("Encode command is not implemented yet");
+    }
+    Commands::Plot(plot_args) => {
+      debug!("Plotting metrics...");
+      let input_file = plot_args.input_file;
+      if !input_file.exists() {
+        error!("Input file does not exist: {}", input_file.display());
+        return;
+      }
+      let metrics_snapshot: _metrics::MetricsSnapshot = serde_json::from_reader(fs::File::open(input_file).expect("Failed to open input file")).expect("Failed to parse metrics snapshot");
+      plot_metrics(&metrics_snapshot);
+      return;
     }
   }
   info!("Done!");
@@ -191,8 +217,8 @@ fn plot_metrics(metrics: &_metrics::MetricsSnapshot) {
     if data.is_empty() {
       continue;
     }
-    let x_max = data.last().unwrap().0 + 0.1;
-    let x_min = data.first().unwrap().0 - 0.1;
+    let x_max = data.last().unwrap().0 + 0.01;
+    let x_min = data.first().unwrap().0 - 0.01;
     println!("{} [{}] {:?}", name, data.len(), data.first());
     let rgb = Rgb::new(255, 255, 0);
     Chart::new(120, 30, x_min, x_max)
@@ -204,8 +230,8 @@ fn plot_metrics(metrics: &_metrics::MetricsSnapshot) {
     if data.is_empty() {
       continue;
     }
-    let x_max = data.last().unwrap().0 + 0.1;
-    let x_min = data.first().unwrap().0 - 0.1;
+    let x_max = data.last().unwrap().0 + 0.01;
+    let x_min = data.first().unwrap().0 - 0.01;
     println!("{} [{}] {:?}", name, data.len(), data.first());
     let rgb = Rgb::new(255, 255, 0);
     Chart::new(120, 30, x_min, x_max)

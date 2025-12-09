@@ -149,13 +149,13 @@ pub fn init_metrics() -> Result<(), SetRecorderError<MetricsRecorder>> {
   Ok(())
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct BlockSnapshot<T> {
   pub values: Vec<T>,
   pub timestamps: Vec<f64>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MetricsSnapshot {
   pub counters: OrderMap<String, BlockSnapshot<u64>>,
   pub gauges: OrderMap<String, BlockSnapshot<f64>>,
