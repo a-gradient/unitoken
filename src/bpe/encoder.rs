@@ -1,4 +1,3 @@
-use core::num;
 use std::{
   collections::{BTreeMap, HashMap},
   fs::File,
@@ -7,7 +6,6 @@ use std::{
 };
 
 use moka::sync::Cache;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
   MyError, MyResult,
@@ -315,17 +313,21 @@ where
 mod tests {
   use super::*;
 
+  fn _setup_bpe(name: &str) -> BpeEncoder<u8> {
+    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
+    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
+    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
+    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    BpeEncoder::new(vocab, merges)
+  }
+
   #[test]
   fn test_bpe_encode_words() {
     const NAME: &str = "tinystories_sample_5M";
     // const NAME: &str = "TinyStoriesV2-GPT4-train";
     let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap()).unwrap();
     let input = input.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<_>>();
-    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{NAME}.json")).unwrap()).unwrap();
-    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{NAME}.txt")).unwrap(), &vocab).unwrap();
-    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
-    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    let bpe = BpeEncoder::new(vocab, merges);
+    let bpe = _setup_bpe(NAME);
     let result = bpe._encode_words(&input).unwrap();
     assert_eq!(result.len(), input.len());
 
@@ -341,11 +343,7 @@ mod tests {
     const NAME: &str = "tinystories_sample_5M";
     let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/{NAME}_words.json")).unwrap()).unwrap();
     let input = input.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<_>>();
-    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{NAME}.json")).unwrap()).unwrap();
-    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{NAME}.txt")).unwrap(), &vocab).unwrap();
-    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
-    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    let mut bpe = BpeEncoder::new(vocab, merges);
+    let mut bpe = _setup_bpe(NAME);
     bpe.cache = Cache::new(input.len() as u64 * 6 / 5);
     let result1 = bpe.encode_words(&input).unwrap();
     let result2 = bpe.encode_words(&input).unwrap();
@@ -356,11 +354,7 @@ mod tests {
   #[test]
   fn test_bpe_encode_file() {
     const NAME: &str = "tinystories_sample_5M";
-    let vocab = BpeEncoder::_load_vocab(std::fs::File::open(format!("fixtures/vocab.{NAME}.json")).unwrap()).unwrap();
-    let merges = BpeEncoder::_load_merges(std::fs::File::open(format!("fixtures/merges.{NAME}.txt")).unwrap(), &vocab).unwrap();
-    let vocab = vocab.into_iter().map(|(k, v)| (v, k)).collect();
-    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    let bpe = BpeEncoder::new(vocab, merges);
+    let bpe = _setup_bpe(NAME);
     let result = bpe.encode_file(
       format!("fixtures/{NAME}.txt"),
       1,
