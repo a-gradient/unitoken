@@ -17,12 +17,12 @@ impl<T> Frame<T> {
 }
 
 #[derive(Default)]
-pub struct Block<T> {
+struct Block<T> {
   frames: Vec<Frame<T>>,
   current: T,
 }
 
-pub struct GlobalStore {
+struct GlobalStore {
   started_at: std::time::Instant,
   counters: Mutex<HashMap<String, Block<u64>>>,
   gauges: Mutex<HashMap<String, Block<f64>>>,
@@ -146,4 +146,80 @@ pub fn init_metrics() -> Result<(), SetRecorderError<MetricsRecorder>> {
   let recorder = MetricsRecorder;
   metrics::set_global_recorder(recorder)?;
   Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct BlockSnapshot<T> {
+  pub values: Vec<T>,
+  pub timestamps: Vec<f64>,
+}
+
+#[derive(serde::Serialize)]
+pub struct MetricsSnapshot {
+  pub counters: HashMap<String, BlockSnapshot<u64>>,
+  pub gauges: HashMap<String, BlockSnapshot<f64>>,
+  pub histograms: HashMap<String, BlockSnapshot<f64>>,
+}
+
+#[must_use]
+pub fn capture_metrics_snapshot() -> MetricsSnapshot {
+  let store = global_store();
+  let mut counters = HashMap::new();
+  fn block_snapshot<T: Copy>(block: &mut Block<T>, started_at: std::time::Instant) -> BlockSnapshot<T> {
+    let mut values = Vec::new();
+    let mut timestamps = Vec::new();
+    for frame in &block.frames {
+      values.push(frame.value);
+      let elapsed = frame.timestamp.duration_since(started_at).as_secs_f64();
+      timestamps.push(elapsed);
+    }
+    block.frames.clear();
+    BlockSnapshot {
+      values,
+      timestamps,
+    }
+  }
+  {
+    let mut map = store.counters.lock().unwrap();
+    for (key, block) in map.iter_mut() {
+      if block.frames.is_empty() {
+        continue;
+      }
+      counters.insert(
+        key.clone(),
+        block_snapshot(block, store.started_at),
+      );
+    }
+  }
+  let mut gauges = HashMap::new();
+  {
+    let mut map = store.gauges.lock().unwrap();
+    for (key, block) in map.iter_mut() {
+      if block.frames.is_empty() {
+        continue;
+      }
+      gauges.insert(
+        key.clone(),
+        block_snapshot(block, store.started_at)
+      );
+    }
+  }
+  let mut histograms = HashMap::new();
+  {
+    let mut map = store.histograms.lock().unwrap();
+    for (key, block) in map.iter_mut() {
+      if block.frames.is_empty() {
+        continue;
+      }
+      histograms.insert(
+        key.clone(),
+        block_snapshot(block, store.started_at)
+      );
+    }
+  }
+  MetricsSnapshot {
+    counters,
+    gauges,
+    histograms,
+  }
 }

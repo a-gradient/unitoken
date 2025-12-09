@@ -161,4 +161,9 @@ fn main() {
       unimplemented!("Encode command is not implemented yet");
     }
   }
+  let snapshot = _metrics::capture_metrics_snapshot();
+  serde_json::to_writer_pretty(
+    std::fs::File::create("out/.metrics_snapshot.json").expect("Failed to create metrics snapshot file"),
+    &snapshot,
+  ).ok();
 }
