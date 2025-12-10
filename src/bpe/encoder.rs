@@ -1,11 +1,11 @@
-use std::{collections::{BTreeMap, HashMap}, mem::MaybeUninit, path::Path};
+use std::{collections::{BTreeMap, HashMap}, path::Path};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, get_words_index_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
+  pretokenizer::{RE, SplitToken, create_special_token_regex, find_chunk_boundaries, get_words_from_file, get_words_index_from_segment, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
 };
 
 use super::*;
@@ -103,7 +103,7 @@ where
       let idx = *vocab_rev.get(&w).ok_or_else(|| MyError::Oov(w.debug_display()))?;
       Ok((s, idx))
     }).collect::<MyResult<_>>()?;
-    let max_cap = vocab.len() as u64 * 3 / 2;
+    let max_cap = vocab.len() as u64 * 500;
     Ok(Self {
       vocab_bytes,
       vocab_rev,
@@ -339,32 +339,42 @@ where
   where
     for<'a> &'a str: ToWord<C>,
   {
-    let words_index = get_words_index_from_file(&path, num_chunks, self.re_special_tokens.clone(), self._split_special_token())?;
-    let input = words_index.iter().filter(|(k, _)| !k.is_special()).map(|(k, _)| k.as_str().to_string()).collect::<Vec<_>>();
-    let token_num = words_index.iter().map(|(_, v)| v.len()).sum::<usize>();
+    let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
+    let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
+    let params = boundaries
+      .iter()
+      .zip(boundaries.iter().skip(1))
+      .enumerate()
+      .map(|(index , (start, end))| (index, *start, (*end - *start) as usize))
+      .collect::<Vec<_>>();
+    let segments_words_idxs = params.into_iter()
+      .map(|(_index, offset, len)| {
+        let words_index = get_words_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
+        let input = words_index.iter().filter(|(k, _)| !k.is_special()).map(|(k, _)| k.as_str().to_string()).collect::<Vec<_>>();
+        let _ = self.encode_words(input)?;
+        let mut result = BTreeMap::new();
+        for ( word, idxs) in words_index {
+          let encoded = match word {
+            SplitToken::Special(_) => {
+              let idx = *self.special_tokens.get(word.as_str()).ok_or_else(|| MyError::Oov(word.as_str().to_string()))?;
+              vec![idx].to_word()
+            },
+            SplitToken::Token(_) => self.encode_word(&word)?,
+          };
+          for idx in idxs {
+            result.insert(idx , encoded.clone());
+          }
+        }
+        let final_result = result.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
+        Ok(final_result)
+      }).collect::<MyResult<Vec<_>>>()?;
 
-    debug!("Creating cache from {} tokens", input.len());
-    let cache = self._create_cache_from_words(input)?;
-
-    debug!("Initialize result vec with size {}", token_num);
-    let mut result = vec![];
-    result.resize_with(token_num, MaybeUninit::<Word<Idx>>::uninit);
-    debug!("Encoding with cache");
-    for ( word, idxs) in words_index {
-      let encoded = if let Some(cached) = cache.get(word.as_str()) {
-          cached.clone()
-      } else {
-        warn!("word '{:?}' not in cache, encode it directly", word);
-        let encoded = self.encode_word(&word)?;
-        encoded
-      };
-      for idx in idxs {
-        result.get_mut(idx).unwrap().write(encoded.clone());
-      }
+    debug!("Finished encoding segments, merging results...");
+    let mut result = Vec::new();
+    for idxs in segments_words_idxs.into_iter().flatten() {
+      result.extend_from_slice(&idxs);
     }
-    debug!("Flatten result");
-    let result = unsafe { std::mem::transmute::<_, Vec<Word<Idx>>>(result) };
-    Ok(result.iter().map(|i| i.iter().copied()).flatten().collect())
+    Ok(result)
   }
 
   pub fn _encode_file<P: AsRef<std::path::Path>>(

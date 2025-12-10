@@ -9,7 +9,7 @@ use std::{
   path::Path,
 };
 
-use crate::{MyError, MyResult, bpe::{Freq, Idx}};
+use crate::{MyError, MyResult, bpe::Freq};
 
 lazy_static! {
   /// PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
