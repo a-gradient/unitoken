@@ -239,8 +239,10 @@ pub fn get_tokens_index_from_segment<P: AsRef<Path>>(
     }
   }
 
-  metrics::histogram!("get_tokens_index_from_segment.tokens_count").record(tokens_index.len() as f64);
   metrics::counter!("get_tokens_index_from_segment.len").increment(len as _);
+  metrics::histogram!("get_tokens_index_from_segment.special_tokens_sum").record(special_tokens_index.values().map(Vec::len).sum::<usize>() as f64);
+  metrics::histogram!("get_tokens_index_from_segment.tokens_count").record(tokens_index.len() as f64);
+  metrics::histogram!("get_tokens_index_from_segment.doc_idx").record(doc_idx as f64);
 
   trace!(tokens_index_len=?tokens_index.len(), "result");
   Ok((tokens_index, special_tokens_index))
