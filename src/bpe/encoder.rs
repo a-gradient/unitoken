@@ -285,27 +285,7 @@ where
   }
 
 
-  fn encode_tokens_index(&self, tokens_index: HashMap<SplitToken, Vec<usize>>) -> MyResult<Vec<Word<Idx>>> {
-    let input = tokens_index.iter().filter(|(k, _)| !k.is_special()).map(|(k, _)| k.as_str().to_string()).collect::<Vec<_>>();
-    let _ = self.encode_words(input)?;
-    let mut result = BTreeMap::new();
-    for (token, idxs) in tokens_index {
-      let encoded = match token {
-        SplitToken::Special(_) => {
-          let idx = *self.special_tokens.get(token.as_str()).ok_or_else(|| MyError::Oov(token.as_str().to_string()))?;
-          vec![idx].to_word()
-        },
-        SplitToken::Token(_) => self.encode_word(&token)?,
-      };
-      for idx in idxs {
-        result.insert(idx , encoded.clone());
-      }
-    }
-    let final_result = result.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
-    Ok(final_result)
-  }
-
-  fn encode_tokens_index_v2(&self, tokens_index: HashMap<SplitToken, Vec<usize>>) -> MyResult<Vec<Idx>> {
+  fn encode_tokens_index(&self, tokens_index: HashMap<SplitToken, Vec<usize>>) -> MyResult<Vec<Idx>> {
     let total = tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum();
     let mut result: Vec<&[Idx]> = vec![&[]; total];
 
@@ -398,17 +378,15 @@ where
       .enumerate()
       .map(|(index , (start, end))| (index, *start, (*end - *start) as usize))
       .collect::<Vec<_>>();
+
+    debug!("Start encoding file in {num_chunks} chunks...");
     let segments_tokens_index = params.into_iter()
       .map(|(_index, offset, len)| {
         let tokens_index = get_tokens_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
-        self.encode_tokens_index_v2(tokens_index)
+        self.encode_tokens_index(tokens_index)
       }).collect::<MyResult<Vec<_>>>()?;
 
     debug!("Finished encoding segments, merging results...");
-    // let mut result = Vec::new();
-    // for idxs in segments_tokens_index.into_iter().flatten() {
-    //   result.extend_from_slice(&idxs);
-    // }
     let result = segments_tokens_index.into_iter().flatten().collect::<Vec<_>>();
     Ok(result)
   }

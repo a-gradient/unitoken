@@ -227,6 +227,11 @@ pub fn get_tokens_index_from_segment<P: AsRef<Path>>(
       }
     }
   }
+
+  metrics::histogram!("get_tokens_index_from_segment.tokens_count").record(tokens_index.len() as f64);
+  metrics::counter!("get_tokens_index_from_segment.len").increment(len as _);
+
+  trace!(tokens_index_len=?tokens_index.len(), "result");
   Ok(tokens_index)
 }
 
