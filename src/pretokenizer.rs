@@ -204,30 +204,30 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
 }
 
 
-pub fn get_words_index_from_segment<P: AsRef<Path>>(
+pub fn get_tokens_index_from_segment<P: AsRef<Path>>(
   path: P, re_special_tokens: &Regex, offset: u64, len: usize,
 ) -> MyResult<HashMap<SplitToken, Vec<usize>>> {
-  let _span = trace_span!("get_words_index_from_segment", offset = offset, len = len).entered();
+  let _span = trace_span!("get_tokens_index_from_segment", offset = offset, len = len).entered();
 
-  metrics::counter!("get_words_index_from_segment.calls").increment(1);
+  metrics::counter!("get_tokens_index_from_segment.calls").increment(1);
   let buffer = read_file_to_buffer(&path, offset, len)?;
 
   let content = String::from_utf8_lossy(&buffer);
   let parts = split_special_tokens(&content, &re_special_tokens)?;
-  let mut words_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
-  let mut index = 0;
+  let mut tokens_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
+  let mut doc_idx = 0;
   for part in parts.iter() {
     if part.is_special() {
-      words_index.entry(SplitToken::Special(part.as_str().to_string())).or_default().push(index);
-      index += 1;
+      tokens_index.entry(SplitToken::Special(part.as_str().to_string())).or_default().push(doc_idx);
+      doc_idx += 1;
     } else {
       for token in pretokenizer_tokens(part.as_str(), &RE)? {
-        words_index.entry(SplitToken::Token(token)).or_default().push(index);
-        index += 1;
+        tokens_index.entry(SplitToken::Token(token)).or_default().push(doc_idx);
+        doc_idx += 1;
       }
     }
   }
-  Ok(words_index)
+  Ok(tokens_index)
 }
 
 pub fn get_words_from_file<P: AsRef<Path>>(
@@ -257,7 +257,7 @@ pub fn get_words_from_file<P: AsRef<Path>>(
   Ok(words)
 }
 
-pub fn get_words_index_from_file<P: AsRef<Path>>(
+pub fn get_tokens_index_from_file<P: AsRef<Path>>(
   path: P, num_chunks: u32, re_special_tokens: Regex, split_special_token: Option<&str>,
 ) -> MyResult<HashMap<SplitToken, Vec<usize>>> {
   let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
@@ -270,21 +270,21 @@ pub fn get_words_index_from_file<P: AsRef<Path>>(
     .map(|(index , (start, end))| (index, *start, (*end - *start) as usize))
     .collect::<Vec<_>>();
 
-  let mut segments_words_index = params
+  let mut segments_tokens_index = params
     .into_par_iter()
     .map(|(index, offset, len)| {
-      get_words_index_from_segment(&path, &re_special_tokens.clone(), offset, len)
-        .map(|segment_words_index| (index, segment_words_index))
+      get_tokens_index_from_segment(&path, &re_special_tokens.clone(), offset, len)
+        .map(|segment_tokens_index| (index, segment_tokens_index))
     })
     .collect::<MyResult<Vec<_>>>()?;
 
-  segments_words_index.sort_by(|(chunk_id_a, _), (chunk_id_b, _)| chunk_id_a.cmp(chunk_id_b));
-  let mut segments_words_index = segments_words_index.into_iter().map(|(_, m)| m).collect::<Vec<_>>();
-  let token_nums = segments_words_index.iter().map( | words_index| {
+  segments_tokens_index.sort_by(|(chunk_id_a, _), (chunk_id_b, _)| chunk_id_a.cmp(chunk_id_b));
+  let mut segments_tokens_index = segments_tokens_index.into_iter().map(|(_, m)| m).collect::<Vec<_>>();
+  let token_nums = segments_tokens_index.iter().map( | words_index| {
     words_index.values().map(|v| v.len()).sum::<usize>()
   }).collect::<Vec<_>>();
   let index_offset = prefix_sum(&token_nums);
-  for (segment_words_index, &start_index) in segments_words_index.iter_mut().zip(&index_offset) {
+  for (segment_words_index, &start_index) in segments_tokens_index.iter_mut().zip(&index_offset) {
     for idxs in segment_words_index.values_mut() {
       for idx in idxs {
         *idx += start_index;
@@ -292,15 +292,15 @@ pub fn get_words_index_from_file<P: AsRef<Path>>(
     }
   }
 
-  let mut words_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
+  let mut tokens_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
 
-  segments_words_index
+  segments_tokens_index
     .into_iter()
     .flatten()
-    .for_each(|(token, idxs)| {
-      words_index.entry(token).or_default().extend(idxs);
+    .for_each(|(token, doc_idxs)| {
+      tokens_index.entry(token).or_default().extend(doc_idxs);
     });
-  Ok(words_index)
+  Ok(tokens_index)
 }
 
 fn prefix_sum(v: &[usize]) -> Vec<usize> {
@@ -425,32 +425,32 @@ mod tests {
   }
 
   #[test]
-  fn test_get_words_index_from_segment() {
+  fn test_get_tokens_index_from_segment() {
     const NAME: &str = "tinystories_sample_5M";
     let path = format!("fixtures/{NAME}.txt");
-    let words_index = get_words_index_from_segment(
+    let tokens_index = get_tokens_index_from_segment(
       &path,
       &create_special_token_regex(&["<|endoftext|>".to_string()]),
       0, 5242880,
     ).unwrap();
-    let idxs = words_index.get(&SplitToken::Token(" the".to_string())).unwrap();
+    let idxs = tokens_index.get(&SplitToken::Token(" the".to_string())).unwrap();
     println!("the idxs length: {:?}", idxs.len());
-    assert!( idxs.len() != 0);
+    assert_ne!( idxs.len(), 0);
   }
 
   #[test]
-  fn test_get_words_index_from_file() {
+  fn test_get_tokens_index_from_file() {
     const NAME: &str = "tinystories_sample_5M";
     let path = format!("fixtures/{NAME}.txt");
     let num_chunks = 4;
-    let words_index = get_words_index_from_file(
+    let tokens_index = get_tokens_index_from_file(
       path,
       num_chunks,
       create_special_token_regex(&["<|endoftext|>".to_string()]),
       Some("<|endoftext|>"),
     ).unwrap();
-    assert!(words_index.len() > 0);
-    let words_index = words_index.into_iter().map(|(w, v)| (w.as_str().to_string(), v)).collect::<HashMap<_, _>>();
-    serde_json::to_writer_pretty(std::fs::File::create(format!("out/_words_index.{NAME}.json")).unwrap(), &words_index).unwrap();
+    assert_ne!(tokens_index.len(), 0);
+    let tokens_index = tokens_index.into_iter().map(|(w, v)| (w.as_str().to_string(), v)).collect::<HashMap<_, _>>();
+    serde_json::to_writer_pretty(std::fs::File::create(format!("out/_tokens_index.{NAME}.json")).unwrap(), &tokens_index).unwrap();
   }
 }

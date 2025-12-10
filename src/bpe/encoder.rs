@@ -5,7 +5,7 @@ use moka::sync::Cache;
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, SplitToken, create_special_token_regex, find_chunk_boundaries, get_words_from_file, get_words_index_from_segment, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
+  pretokenizer::{RE, SplitToken, create_special_token_regex, find_chunk_boundaries, get_words_from_file, get_tokens_index_from_segment, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
 };
 
 use super::*;
@@ -347,19 +347,19 @@ where
       .enumerate()
       .map(|(index , (start, end))| (index, *start, (*end - *start) as usize))
       .collect::<Vec<_>>();
-    let segments_words_idxs = params.into_iter()
+    let segments_tokens_index = params.into_iter()
       .map(|(_index, offset, len)| {
-        let words_index = get_words_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
-        let input = words_index.iter().filter(|(k, _)| !k.is_special()).map(|(k, _)| k.as_str().to_string()).collect::<Vec<_>>();
+        let tokens_index = get_tokens_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
+        let input = tokens_index.iter().filter(|(k, _)| !k.is_special()).map(|(k, _)| k.as_str().to_string()).collect::<Vec<_>>();
         let _ = self.encode_words(input)?;
         let mut result = BTreeMap::new();
-        for ( word, idxs) in words_index {
-          let encoded = match word {
+        for (token, idxs) in tokens_index {
+          let encoded = match token {
             SplitToken::Special(_) => {
-              let idx = *self.special_tokens.get(word.as_str()).ok_or_else(|| MyError::Oov(word.as_str().to_string()))?;
+              let idx = *self.special_tokens.get(token.as_str()).ok_or_else(|| MyError::Oov(token.as_str().to_string()))?;
               vec![idx].to_word()
             },
-            SplitToken::Token(_) => self.encode_word(&word)?,
+            SplitToken::Token(_) => self.encode_word(&token)?,
           };
           for idx in idxs {
             result.insert(idx , encoded.clone());
@@ -371,7 +371,7 @@ where
 
     debug!("Finished encoding segments, merging results...");
     let mut result = Vec::new();
-    for idxs in segments_words_idxs.into_iter().flatten() {
+    for idxs in segments_tokens_index.into_iter().flatten() {
       result.extend_from_slice(&idxs);
     }
     Ok(result)
