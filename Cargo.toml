@@ -23,6 +23,7 @@ rgb = "0.8.52"
 indicatif = "0.18.3"
 parquet = "57.1.0"
 arrow = "57.1.0"
+hotpath = "0.8.0"
 
 [profile.dev.package."*"]
 opt-level = 2
@@ -35,3 +36,7 @@ debug = true
 # 'line-tables-only' is a good balance between file size and profiling detail
 debug = "line-tables-only"
 # RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
+
+[features]
+default = []
+hotpath = ["hotpath/hotpath", "hotpath/hotpath-alloc"]

@@ -49,6 +49,7 @@ pub fn pretokenizer_tokens(s: &str, pat: &Regex) -> MyResult<Vec<String>> {
   Ok(result)
 }
 
+#[hotpath::measure]
 pub fn find_chunk_boundaries<P: AsRef<Path>>(
   path: P, desired_num_chunks: u32, split_special_token: &str,
 ) -> MyResult<Vec<u64>> {
@@ -180,6 +181,7 @@ pub fn read_file_to_buffer<P: AsRef<Path>>(path: P, offset: u64, len: usize) -> 
   Ok(buffer)
 }
 
+#[hotpath::measure]
 pub fn get_words_from_segment<P: AsRef<Path>>(
   path: P, re_special_tokens: &Regex, offset: u64, len: usize,
 ) -> MyResult<BTreeMap<String, Freq>> {
@@ -203,7 +205,7 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
   Ok(words)
 }
 
-
+#[hotpath::measure]
 pub fn get_tokens_index_from_segment<P: AsRef<Path>>(
   path: P, re_special_tokens: &Regex, offset: u64, len: usize,
 ) -> MyResult<HashMap<SplitToken, Vec<usize>>> {

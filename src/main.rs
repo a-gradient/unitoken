@@ -99,7 +99,7 @@ struct TrainArgs {
   num_chunks: u32,
   #[arg(long, default_value = "gpt2")]
   spec: SpecEnum,
-  #[arg(long)]
+  #[arg(long = "out-spec")]
   output_spec: Option<SpecEnum>,
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
@@ -334,6 +334,7 @@ fn run_encode(args: EncodeArgs) {
   );
 }
 
+#[hotpath::main(percentiles = [99])]
 fn main() {
   let cli = Cli::parse();
   let verbose = cli.verbose + cli.command.verbose();
