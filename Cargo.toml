@@ -22,7 +22,7 @@ textplots = "0.8.7"
 rgb = "0.8.52"
 indicatif = "0.18.3"
 hotpath = "0.8.0"
-npyz = "0.8.4"
+npyz = { version = "0.8.4", features = ["npz"] }
 
 [profile.dev.package."*"]
 opt-level = 2

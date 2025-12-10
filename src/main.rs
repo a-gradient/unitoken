@@ -273,7 +273,7 @@ where
 
   info!("Encoded idxs count: {}", idxs.len());
   info!("Saving BPE idxs... to {}", out_file.display());
-  bpe.save_idxs(out_file, idxs).expect("save idxs");
+  bpe.save_idxs_npy(out_file, idxs).expect("save idxs");
 }
 
 

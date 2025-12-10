@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap}, path::Path};
+use std::{collections::{BTreeMap, HashMap}, io::BufWriter, path::Path};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
@@ -7,7 +7,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, SplitToken, create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
+  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
 };
 
 use super::*;
@@ -63,13 +63,28 @@ where
     Ok(special_tokens)
   }
 
-  pub fn save_idxs<P: AsRef<Path>>(&self, file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
+  #[hotpath::measure]
+  pub fn save_idxs_npy<P: AsRef<Path>>(&self, file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
     let mut file = std::fs::File::create(file_path)?;
     let mut writer = npyz::WriteOptions::new()
       .default_dtype()
       .shape(&[idxs.len() as u64])
-      .writer(&mut file)
+      .writer(BufWriter::new(&mut file))
       .begin_1d()?;
+
+    writer.extend(idxs)?;
+    writer.finish()?;
+    Ok(())
+  }
+
+  #[hotpath::measure]
+  pub fn save_idxs_npz<P: AsRef<Path>>(&self, file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
+    let mut file = std::fs::File::create(file_path)?;
+    let mut npz = npyz::npz::NpzWriter::new(BufWriter::new(&mut file));
+    let mut writer = npz.array("idx", Default::default())?
+      .default_dtype()
+      .shape(&[idxs.len() as u64])
+      .begin_nd()?;
 
     writer.extend(idxs)?;
     writer.finish()?;
