@@ -129,7 +129,14 @@ impl SplitToken {
   pub fn is_special(&self) -> bool {
     matches!(self, SplitToken::Special(_))
   }
+}
 
+impl std::ops::Deref for SplitToken {
+  type Target = str;
+
+  fn deref(&self) -> &Self::Target {
+    self.as_str()
+  }
 }
 
 pub fn create_special_token_regex(special_tokens: &[String]) -> Regex {
@@ -199,7 +206,7 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
 
 pub fn get_words_index_from_segment<P: AsRef<Path>>(
   path: P, re_special_tokens: &Regex, offset: u64, len: usize,
-) -> MyResult<HashMap<SplitToken, Vec<Idx>>> {
+) -> MyResult<HashMap<SplitToken, Vec<usize>>> {
   let _span = trace_span!("get_words_index_from_segment", offset = offset, len = len).entered();
 
   metrics::counter!("get_words_index_from_segment.calls").increment(1);
@@ -207,7 +214,7 @@ pub fn get_words_index_from_segment<P: AsRef<Path>>(
 
   let content = String::from_utf8_lossy(&buffer);
   let parts = split_special_tokens(&content, &re_special_tokens)?;
-  let mut words_index: HashMap<SplitToken, Vec<Idx>> = HashMap::new();
+  let mut words_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
   let mut index = 0;
   for part in parts.iter() {
     if part.is_special() {
@@ -252,7 +259,7 @@ pub fn get_words_from_file<P: AsRef<Path>>(
 
 pub fn get_words_index_from_file<P: AsRef<Path>>(
   path: P, num_chunks: u32, re_special_tokens: Regex, split_special_token: Option<&str>,
-) -> MyResult<HashMap<SplitToken, Vec<Idx>>> {
+) -> MyResult<HashMap<SplitToken, Vec<usize>>> {
   let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
   let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
   let path = path.as_ref().to_path_buf();
@@ -280,12 +287,12 @@ pub fn get_words_index_from_file<P: AsRef<Path>>(
   for (segment_words_index, &start_index) in segments_words_index.iter_mut().zip(&index_offset) {
     for idxs in segment_words_index.values_mut() {
       for idx in idxs {
-        *idx += start_index as Idx;
+        *idx += start_index;
       }
     }
   }
 
-  let mut words_index: HashMap<SplitToken, Vec<Idx>> = HashMap::new();
+  let mut words_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
 
   segments_words_index
     .into_iter()

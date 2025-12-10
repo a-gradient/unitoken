@@ -117,6 +117,8 @@ struct EncodeArgs {
   vocab_name: Option<String>,
   #[arg(short = 'c', long = "chunks", default_value = "1024")]
   num_chunks: u32,
+  #[arg(long = "version", default_value = "2")]
+  version: u8,
   #[arg(long, default_value = "gpt2")]
   spec: SpecEnum,
   #[arg(long = "special-tokens")]
@@ -245,12 +247,15 @@ fn bpe_train<P: AsRef<Path>>(
   }
 }
 
-fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf, spec: SpecEnum) {
+fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf, spec: SpecEnum, version: u8) {
   info!("Initializing BPE encoder...");
   let bpe = BpeEncoder::new_from_file(spec.get_u8().as_ref(), vocab_path, merges_path, special_tokens.clone()).expect("create bpe encoder");
 
   info!("Encoding file: {}", path.as_ref().display());
-  let idxs = bpe.encode_file_with_cache(&path, num_chunks).expect("encode file");
+  let idxs = match version {
+    2 => bpe.encode_file_with_cache_v2(&path, num_chunks).expect("encode file v2"),
+    _ => bpe.encode_file_with_cache(&path, num_chunks).expect("encode file"),
+  };
 
   info!("Saving BPE idxs...");
   bpe.save_idxs(out_file, idxs).expect("save idxs");
@@ -307,6 +312,7 @@ fn run_encode(args: EncodeArgs) {
       BpeEncoder::get_special_tokens_from_vocab(&Gpt2Spec, &vocab_file).expect("get special tokens from vocab file")
     };
 
+  debug!("Version: {}", args.version);
   debug!("Input file: {}", args.input_file.display());
   debug!("Vocabulary file: {}", vocab_file.display());
   debug!("Merges file: {}", merges_file.display());
@@ -323,6 +329,7 @@ fn run_encode(args: EncodeArgs) {
     args.num_chunks,
     &out_file,
     args.spec,
+    args.version,
   );
 }
 

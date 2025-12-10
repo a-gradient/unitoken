@@ -1,11 +1,11 @@
-use std::{collections::{BTreeMap, HashMap}, path::Path};
+use std::{collections::{BTreeMap, HashMap}, mem::MaybeUninit, path::Path};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
+  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_words_from_file, get_words_index_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
 };
 
 use super::*;
@@ -315,6 +315,40 @@ where
     let cache = self._create_cache_from_words(input)?;
     let bpe_with_cache = self.clone().with_cache(cache);
     bpe_with_cache._encode_file(path, num_chunks)
+  }
+
+  pub fn encode_file_with_cache_v2<P: AsRef<std::path::Path>>(
+    &self, path: P, num_chunks: u32,
+  ) -> MyResult<Vec<Idx>>
+  where
+    for<'a> &'a str: ToWord<C>,
+  {
+    let words_index = get_words_index_from_file(&path, num_chunks, self.re_special_tokens.clone(), self._split_special_token())?;
+    let input = words_index.iter().filter(|(k, _)| !k.is_special()).map(|(k, _)| k.as_str().to_string()).collect::<Vec<_>>();
+    let token_num = words_index.iter().map(|(_, v)| v.len()).sum::<usize>();
+
+    debug!("Creating cache from {} tokens", input.len());
+    let cache = self._create_cache_from_words(input)?;
+
+    debug!("Initialize result vec with size {}", token_num);
+    let mut result = vec![];
+    result.resize_with(token_num, MaybeUninit::<Word<Idx>>::uninit);
+    debug!("Encoding with cache");
+    for ( word, idxs) in words_index {
+      let encoded = if let Some(cached) = cache.get(word.as_str()) {
+          cached.clone()
+      } else {
+        warn!("word '{:?}' not in cache, encode it directly", word);
+        let encoded = self.encode_word(&word)?;
+        encoded
+      };
+      for idx in idxs {
+        result.get_mut(idx).unwrap().write(encoded.clone());
+      }
+    }
+    debug!("Flatten result");
+    let result = unsafe { std::mem::transmute::<_, Vec<Word<Idx>>>(result) };
+    Ok(result.iter().map(|i| i.iter().copied()).flatten().collect())
   }
 
   pub fn _encode_file<P: AsRef<std::path::Path>>(
