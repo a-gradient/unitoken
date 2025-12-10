@@ -184,10 +184,16 @@ lazy_static! {
 fn _parse_str(s: &str) -> MyResult<Vec<Character>> {
   let mut result = Vec::new();
   let mut last_i = 0;
+  fn _decode_char(ch: char) -> Character {
+    match ch {
+      '␣' => Character::Unicode(' '),
+      _ => Character::Unicode(ch),
+    }
+  }
   for m in PRINTABLE_REGEX.find_iter(s) {
     let m = m?;
     for c in s[last_i..m.start()].chars() {
-      result.push(Character::Unicode(c));
+      result.push(_decode_char(c));
     }
     last_i = m.end();
     let token = m.as_str();
@@ -205,6 +211,9 @@ fn _parse_str(s: &str) -> MyResult<Vec<Character>> {
     } else {
       return Err(MyError::InvalidPrintableEscape(token.to_string()));
     }
+  }
+  for c in s[last_i..].chars() {
+    result.push(_decode_char(c));
   }
   Ok(result)
 }
@@ -225,7 +234,7 @@ mod tests {
 
   #[test]
   fn test_parse_str() {
-    let s = "a{u0041} {x42}{x43}{u0044}";
+    let s = "a{u0041} {x42}{x43}{u0044}'␣'zz";
     let chars = _parse_str(s).unwrap();
     let expected = vec![
       Character::Unicode('a'),
@@ -234,6 +243,11 @@ mod tests {
       Character::Byte(0x42),
       Character::Byte(0x43),
       Character::Unicode('D'),
+      Character::Unicode('\''),
+      Character::Unicode(' '),
+      Character::Unicode('\''),
+      Character::Unicode('z'),
+      Character::Unicode('z'),
     ];
     assert_eq!(chars, expected);
   }

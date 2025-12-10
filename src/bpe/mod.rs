@@ -152,25 +152,19 @@ impl IdxLike for CharIdx {
   }
 }
 
+/// Trait to convert a character or byte to an index.
+/// This is only used in training, not in encoding.
+/// Since it assuming the idx of byte are contiguous.
 pub trait CharToIdx<I: IdxLike> {
+  /// Convert a character or byte to an index.
+  /// If the character is a byte, it will be converted to an index.
+  /// If the character is a unicode character, it will be converted to a `CharIdx::Char`.
   fn char_to_idx(&self, start: u64) -> I;
 }
 
-pub trait HasChar<C>: Sized {
-  fn get_char(self) -> Option<char>;
-  fn from_char(_c: char) -> Option<Self> { None }
-  fn idx_to_word(self) -> Option<Word<C>> where for<'a> &'a str: ToWord<C>{
-    self.get_char().map(|i| i.to_string().to_word())
-  }
-}
 impl CharToIdx<Idx> for u8 {
   fn char_to_idx(&self, start: u64) -> Idx {
     (*self as u64 + start) as Idx
-  }
-}
-impl<C> HasChar<C> for Idx {
-  fn get_char(self) -> Option<char> {
-    None
   }
 }
 impl CharToIdx<CharIdx> for char {
@@ -182,17 +176,42 @@ impl CharToIdx<CharIdx> for char {
     }
   }
 }
+impl CharToIdx<CharIdx> for u8 {
+  fn char_to_idx(&self, start: u64) -> CharIdx {
+    CharIdx::Idx((*self as u64 + start) as Idx)
+  }
+}
+impl CharToIdx<CharIdx> for Character {
+  fn char_to_idx(&self, start: u64) -> CharIdx {
+    match self {
+      Character::Unicode(c) => c.char_to_idx(start),
+      Character::Byte(b) => b.char_to_idx(start),
+    }
+  }
+}
+
+/// Trait to extract a character from an index or a character.
+/// This is only used in training, since CharIdx is only used in training.
+///
+/// Only [`CharIdx`] would return a character, while [`Idx`] would return `None`.
+pub trait HasChar<C>: Sized {
+  fn get_char(self) -> Option<char>;
+  fn from_char(_c: char) -> Option<Self> { None }
+  fn idx_to_word(self) -> Option<Word<C>> where for<'a> &'a str: ToWord<C>{
+    self.get_char().map(|i| i.to_string().to_word())
+  }
+}
+impl<C> HasChar<C> for Idx {
+  fn get_char(self) -> Option<char> {
+    None
+  }
+}
 impl<C> HasChar<C> for char {
   fn get_char(self) -> Option<char> {
     Some(self)
   }
   fn from_char(c: char) -> Option<Self> {
     Some(c)
-  }
-}
-impl CharToIdx<CharIdx> for u8 {
-  fn char_to_idx(&self, start: u64) -> CharIdx {
-    CharIdx::Idx((*self as u64 + start) as Idx)
   }
 }
 impl<C> HasChar<C> for CharIdx {
@@ -206,11 +225,36 @@ impl<C> HasChar<C> for CharIdx {
     Some(CharIdx::Char(c))
   }
 }
-impl CharToIdx<CharIdx> for Character {
-  fn char_to_idx(&self, start: u64) -> CharIdx {
+
+pub trait CharSplit: Sized {
+  /// Split a character into a vector of characters.
+  /// This is used to split a character into its constituent parts.
+  fn char_split(&self) -> Option<Vec<Self>> {
+    None
+  }
+  fn char_split_u8(&self, buffer: &mut Vec<u8>);
+}
+impl CharSplit for u8 {
+  fn char_split_u8(&self, buffer: &mut Vec<u8>) {
+    buffer.push(*self);
+  }
+}
+impl CharSplit for Character {
+  fn char_split(&self) -> Option<Vec<Self>> {
     match self {
-      Character::Unicode(c) => c.char_to_idx(start),
-      Character::Byte(b) => b.char_to_idx(start),
+      Self::Unicode(c) => Some(c.to_string().bytes().into_iter().map(Self::Byte).collect()),
+      Self::Byte(_) => None,
+    }
+  }
+  fn char_split_u8(&self, buffer: &mut Vec<u8>) {
+    match self {
+      Self::Unicode(c) => {
+        // TODO: memory allocate
+        buffer.extend_from_slice(c.to_string().as_bytes());
+      }
+      Self::Byte(b) => {
+        buffer.push(*b);
+      }
     }
   }
 }

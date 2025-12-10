@@ -73,13 +73,7 @@ where
     writer.close()?;
     Ok(())
   }
-}
 
-impl<C: Ord + Clone + Cachable> BpeEncoder<C>
-where
-  Word<C>: WordDebugExt,
-  for<'a> &'a str: ToWord<C>,
-{
   pub fn new(vocab: BTreeMap<Idx, Word<C>>, merges: Vec<((Idx, Idx), Idx)>, special_tokens: Vec<String>) -> MyResult<Self> {
     let vocab_rev = vocab
       .iter()
@@ -121,11 +115,33 @@ where
       cache: Cache::new(max_cap),
     })
   }
+}
 
+impl<C> BpeEncoder<C>
+where
+  C: Ord + Clone + Cachable + CharSplit,
+  Word<C>: WordDebugExt,
+  for<'a> &'a str: ToWord<C>,
+{
   pub fn _pretoken(&self, word: Word<C>, freq: Freq) -> MyResult<PreToken<C, Idx>> {
-    let idxs = word.iter()
-      .map(|c| self.vocab_bytes.get(c).copied().ok_or_else(|| crate::MyError::OovBytes(vec![c.clone()].to_word().debug_display())))
-      .collect::<Result<_, _>>()?;
+    let mut idxs = Vec::new();
+    for c in word.iter() {
+      if let Some(idx) = self.vocab_bytes.get(c) {
+        idxs.push(*idx);
+        continue;
+      }
+      // if c is char and not in vocab_bytes, try split it into bytes
+      let Some(split) = c.char_split() else {
+        return Err(MyError::OovBytes(vec![c.clone()].to_word().debug_display()));
+      };
+      for b in split {
+        if let Some(idx) = self.vocab_bytes.get(&b) {
+          idxs.push(*idx);
+        } else {
+          return Err(MyError::OovBytes(vec![c.clone()].to_word().debug_display()));
+        }
+      }
+    }
     Ok(PreToken { src: word, idxs, freq })
   }
 
@@ -382,10 +398,38 @@ where
   }
 }
 
+impl<C: Clone> BpeEncoder<C>
+where
+  Word<C>: WordDebugExt,
+  C: CharSplit,
+{
+  pub fn _decode(&self, idxs: &[Idx]) -> MyResult<Vec<Word<C>>> {
+    let mut result = Vec::with_capacity(idxs.len());
+    for idx in idxs {
+      if let Some(word) = self.vocab.get(idx) {
+        result.push(word.clone());
+      } else {
+        return Err(MyError::OovIdx(idx.to_u64()));
+      }
+    }
+    Ok(result)
+  }
+
+  pub fn decode(&self, idxs: &[Idx]) -> MyResult<String> {
+    let words = self._decode(idxs)?;
+    let mut result = Vec::new();
+    for word in words {
+      for c in word.iter() {
+        c.char_split_u8(&mut result);
+      }
+    }
+    Ok(String::from_utf8_lossy(&result).to_string())
+  }
+}
 
 #[cfg(test)]
 mod tests {
-  use crate::spec::gpt2::Gpt2Spec;
+  use crate::spec::{gpt2::Gpt2Spec, uni::UniSpec};
 
   use super::*;
 
@@ -438,5 +482,24 @@ mod tests {
     // assert!(result.len() == 1269588);
     // let total_index: usize = result.iter().map(|idxs| idxs.len()).sum();
     assert!(result.len() == 1424324);
+  }
+
+  #[test]
+  fn test_bpe_encode_file_uni() {
+    const NAME: &str = "TinyStories_all_data_zh_1M-sample";
+    let spec = UniSpec;
+    let vocab = BpeEncoder::_load_vocab(&spec, std::fs::File::open(format!("fixtures/vocab.{NAME}.uni.json")).unwrap()).unwrap();
+    let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{NAME}.uni.txt")).unwrap(), &vocab).unwrap();
+    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    let bpe = BpeEncoder::<Character>::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap();
+    let result = bpe.encode_file_with_cache(
+      format!("fixtures/{NAME}.txt"),
+      1,
+    ).unwrap();
+    assert_eq!(result.len(), 886572);
+    let decoded = bpe.decode(&result).unwrap();
+    let input = std::fs::read_to_string(format!("fixtures/{NAME}.txt")).unwrap();
+    assert_eq!(decoded.len(), 5292796);
+    assert_eq!(decoded, input);
   }
 }
