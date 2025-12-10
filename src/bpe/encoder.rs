@@ -2,11 +2,12 @@ use std::{collections::{BTreeMap, HashMap}, path::Path};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
+use npyz::WriterBuilder;
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, SplitToken, create_special_token_regex, find_chunk_boundaries, get_words_from_file, get_tokens_index_from_segment, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
+  pretokenizer::{RE, SplitToken, create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
 };
 
 use super::*;
@@ -38,22 +39,25 @@ where
     spec.decode_merges(&mut reader, vocab)
   }
 
-  pub fn new_from_file<P: AsRef<std::path::Path>>(
-    spec: &dyn Spec<C, Idx>, vocab_path: P, merges_path: P, special_tokens: Vec<String>,
+  pub fn new_from_file<P1: AsRef<Path>, P2: AsRef<Path>>(
+    spec: &dyn Spec<C, Idx>, vocab_path: P1, merges_path: P2, special_tokens: Option<Vec<String>>,
   ) -> MyResult<Self> {
     let vocab = Self::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
     let merges = Self::_load_merges(spec, std::fs::File::open(merges_path)?, &vocab)?;
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    let special_tokens = match special_tokens {
+      Some(tokens) => tokens,
+      None => Self::get_special_tokens_from_vocab(&vocab)?,
+    };
     Self::new(vocab, merges, special_tokens)
   }
 
-  pub fn get_special_tokens_from_vocab<P: AsRef<Path>>(spec: &dyn Spec<C, Idx>, vocab_path: P) -> MyResult<Vec<String>> {
-    let vocab = BpeEncoder::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
+  pub fn get_special_tokens_from_vocab(vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<String>> {
     let mut special_tokens = Vec::new();
     for index in 0..vocab.len() {
       match vocab.get(&(index as Idx)) {
-      Some(token) if token.len() > 1 => special_tokens.push(token.debug_display()),
-      _ => break,
+        Some(token) if token.len() > 1 => special_tokens.push(token.to_string_lossy()),
+        _ => break,
       }
     }
     Ok(special_tokens)
@@ -353,7 +357,7 @@ where
     self
   }
 
-  pub fn encode_file_with_cache<P: AsRef<std::path::Path>>(
+  pub fn encode_file_with_cache<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
   ) -> MyResult<Vec<Idx>>
   where
@@ -367,7 +371,7 @@ where
     bpe_with_cache._encode_file(path, num_chunks)
   }
 
-  pub fn encode_file_with_cache_v2<P: AsRef<std::path::Path>>(
+  pub fn encode_file_with_cache_v2<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
   ) -> MyResult<Vec<Idx>>
   where
@@ -397,7 +401,7 @@ where
     Ok(result)
   }
 
-  pub fn _encode_file<P: AsRef<std::path::Path>>(
+  pub fn _encode_file<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32
   ) -> MyResult<Vec<Idx>>
   where

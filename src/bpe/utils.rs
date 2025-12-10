@@ -53,11 +53,15 @@ impl ToWord<Character> for char {
 
 pub trait WordDebugExt {
   fn debug_display(&self) -> String;
+  fn to_string_lossy(&self) -> String;
 }
 
 impl WordDebugExt for Word<u8> {
   fn debug_display(&self) -> String {
     crate::spec::uni::UniSpec.word_display(self)
+  }
+  fn to_string_lossy(&self) -> String {
+    String::from_utf8_lossy(self).to_string()
   }
 }
 
@@ -70,6 +74,14 @@ impl WordDebugExt for Word<Character> {
         Character::Byte(b) => format!("\\x{:02x}", *b),
       })
       .collect()
+  }
+  fn to_string_lossy(&self) -> String {
+    let mut buffer = Vec::new();
+    self.iter().for_each(|c| match c {
+      Character::Unicode(ch) => buffer.extend_from_slice(ch.to_string().as_bytes()),
+      Character::Byte(b) => buffer.extend_from_slice(&[*b]),
+    });
+    String::from_utf8_lossy(&buffer).to_string()
   }
 }
 

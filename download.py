@@ -55,3 +55,13 @@ if not (cache_dir / f"{name}-train.txt").exists() or True:
       f.write(item + "\n<|endoftext|>\n")
 
 # %%
+from pathlib import Path
+import numpy as np
+name = "TinyStories_all_data_zh_1M"
+out_dir = Path(__file__).parent / "out"
+data = None
+if (out_dir/f"idxs.{name}-sample.npy").exists():
+  data = np.load(out_dir / f"idxs.{name}-sample.npy")
+  print(data.shape)
+
+# %%

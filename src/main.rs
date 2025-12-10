@@ -5,11 +5,11 @@ use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
 use rgb::Rgb;
 use std::{
-  collections::BTreeMap, fs, io::BufReader, path::{Path, PathBuf}
+  collections::BTreeMap, fs, io::BufReader, path::{Path, PathBuf}, sync::Arc
 };
 
 use unitoken::{
-  bpe::{BpeEncoder, BpeTrainer, CharIdx, Character, Idx}, traits::CanTrain, pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}
+  bpe::{BpeEncoder, BpeTrainer, CharIdx, CharSplit, Character, Idx, utils::{ToWord, WordDebugExt}}, pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::CanTrain
 };
 
 mod _metrics;
@@ -85,6 +85,13 @@ impl SpecEnum {
       Self::Uni => Box::new(UniSpec),
     }
   }
+
+  pub fn get_char_idx(&self) -> Box<dyn Spec<Character, Idx>> {
+    match self {
+      Self::Gpt2 => unimplemented!(),
+      Self::Uni => Box::new(UniSpec),
+    }
+  }
 }
 
 #[derive(Parser)]
@@ -121,6 +128,8 @@ struct EncodeArgs {
   version: u8,
   #[arg(long, default_value = "gpt2")]
   spec: SpecEnum,
+  #[arg(long = "out-spec")]
+  output_spec: Option<SpecEnum>,
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
@@ -247,14 +256,19 @@ fn bpe_train<P: AsRef<Path>>(
   }
 }
 
-fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf, spec: SpecEnum, version: u8) {
+fn bpe_encode<C>(input_path: impl AsRef<Path>, vocab_path: impl AsRef<Path>, merges_path: impl AsRef<Path>, special_tokens: Option<Vec<String>>, num_chunks: u32, out_file: &PathBuf, spec: &dyn Spec<C, Idx>, version: u8)
+where
+  C: Ord + std::hash::Hash + CharSplit + Clone + Send + Sync + 'static,
+  Arc<[C]>: WordDebugExt,
+  for<'a> &'a str: ToWord<C>,
+{
   info!("Initializing BPE encoder...");
-  let bpe = BpeEncoder::new_from_file(spec.get_u8().as_ref(), vocab_path, merges_path, special_tokens.clone()).expect("create bpe encoder");
+  let bpe = BpeEncoder::<C>::new_from_file(spec, vocab_path, merges_path, special_tokens).expect("create bpe encoder");
 
-  info!("Encoding file: {}", path.as_ref().display());
+  info!("Encoding file: {}", input_path.as_ref().display());
   let idxs = match version {
-    2 => bpe.encode_file_with_cache_v2(&path, num_chunks).expect("encode file v2"),
-    _ => bpe.encode_file_with_cache(&path, num_chunks).expect("encode file"),
+    2 => bpe.encode_file_with_cache_v2(&input_path, num_chunks).expect("encode file v2"),
+    _ => bpe.encode_file_with_cache(&input_path, num_chunks).expect("encode file"),
   };
 
   info!("Encoded idxs count: {}", idxs.len());
@@ -302,16 +316,21 @@ fn run_encode(args: EncodeArgs) {
     .expect("Failed to convert file stem to str");
 
   let vocab_name = args.vocab_name.unwrap_or(file_stem.to_string());
-  let vocab_file = args.out_dir.join(format!("vocab.{vocab_name}.json"));
-  let merges_file = args.out_dir.join(format!("merges.{vocab_name}.txt"));
+
+  let suffix = match args.spec.get_u8().suffix() {
+    Some(s) => format!(".{}", s),
+    None => "".to_string(),
+  };
+  let vocab_file = args.out_dir.join(format!("vocab.{vocab_name}{suffix}.json"));
+  let merges_file = args.out_dir.join(format!("merges.{vocab_name}{suffix}.txt"));
   let out_file = args.out_dir.join(format!("idxs.{file_stem}.npy"));
 
   let special_tokens = if let Some(special_tokens_path) = args.special_tokens_path {
-      let content = fs::read_to_string(special_tokens_path).expect("Failed to read special tokens file");
-      lines_of(&content)
-    } else {
-      BpeEncoder::get_special_tokens_from_vocab(&Gpt2Spec, &vocab_file).expect("get special tokens from vocab file")
-    };
+    let content = fs::read_to_string(special_tokens_path).expect("Failed to read special tokens file");
+    Some(lines_of(&content))
+  } else {
+    None
+  };
 
   debug!("Version: {}", args.version);
   debug!("Input file: {}", args.input_file.display());
@@ -322,16 +341,36 @@ fn run_encode(args: EncodeArgs) {
   debug!("Special tokens: {:?}", special_tokens);
 
   // TODO read special tokens from vocab file
-  bpe_encode(
-    args.input_file,
-    vocab_file,
-    merges_file,
-    &lines_of(include_str!("../fixtures/default_special_tokens.txt")),
-    args.num_chunks,
-    &out_file,
-    args.spec,
-    args.version,
-  );
+  match args.spec {
+    SpecEnum::Gpt2 => {
+      info!("Using GPT-2 BPE specification");
+      bpe_encode::<u8>(
+        args.input_file,
+        vocab_file,
+        merges_file,
+        special_tokens,
+        args.num_chunks,
+        &out_file,
+        args.spec.get_u8().as_ref(),
+        args.version,
+      );
+      return;
+    }
+    SpecEnum::Uni => {
+      info!("Using Uni BPE specification");
+
+      bpe_encode::<Character>(
+        args.input_file,
+        vocab_file,
+        merges_file,
+        special_tokens,
+        args.num_chunks,
+        &out_file,
+        args.spec.get_char_idx().as_ref(),
+        args.version,
+      );
+    }
+  }
 }
 
 #[hotpath::main(percentiles = [99])]
