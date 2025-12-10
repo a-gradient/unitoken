@@ -60,18 +60,15 @@ where
   }
 
   pub fn save_idxs<P: AsRef<Path>>(&self, file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
-    let field = arrow::datatypes::Field::new("idx", arrow::datatypes::DataType::UInt32, false);
-    let schema = Arc::new(arrow::datatypes::Schema::new(vec![field]));
-    let array = arrow::array::UInt32Array::from(idxs);
-    let batch = arrow::record_batch::RecordBatch::try_new(
-      schema.clone(),
-      vec![Arc::new(array)]
-    )?;
-    let file = std::fs::File::create(file_path)?;
-    let props = parquet::file::properties::WriterProperties::builder().build();
-    let mut writer = parquet::arrow::arrow_writer::ArrowWriter::try_new(file, schema, Some(props))?;
-    writer.write(&batch)?;
-    writer.close()?;
+    let mut file = std::fs::File::create(file_path)?;
+    let mut writer = npyz::WriteOptions::new()
+      .default_dtype()
+      .shape(&[idxs.len() as u64])
+      .writer(&mut file)
+      .begin_1d()?;
+
+    writer.extend(idxs)?;
+    writer.finish()?;
     Ok(())
   }
 

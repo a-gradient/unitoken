@@ -304,7 +304,7 @@ fn run_encode(args: EncodeArgs) {
   let vocab_name = args.vocab_name.unwrap_or(file_stem.to_string());
   let vocab_file = args.out_dir.join(format!("vocab.{vocab_name}.json"));
   let merges_file = args.out_dir.join(format!("merges.{vocab_name}.txt"));
-  let out_file = args.out_dir.join(format!("idxs.{file_stem}.parquet"));
+  let out_file = args.out_dir.join(format!("idxs.{file_stem}.npy"));
 
   let special_tokens = if let Some(special_tokens_path) = args.special_tokens_path {
       let content = fs::read_to_string(special_tokens_path).expect("Failed to read special tokens file");
