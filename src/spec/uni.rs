@@ -4,19 +4,25 @@ use fancy_regex::Regex;
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
 
-use crate::{MyError, MyResult, bpe::{Character, IdxLike, Merge, Word}, spec::{Spec, WordDisplay}};
+use crate::{MyError, MyResult, bpe::{Character, HasChar, IdxLike, Merge, Word}, spec::{Spec, WordDisplay}};
 
 pub struct UniSpec;
 
 impl<C: Ord, I: IdxLike> Spec<C, I> for UniSpec
 where
   Self: WordDisplay<C>,
+  I: HasChar<C>,
 {
   fn encode_vocab(&self, w: &mut dyn std::io::Write, vocab: &BTreeMap<I, Word<C>>) -> MyResult<()> {
     let mut map = OrderMap::new();
     for (idx, word) in vocab.iter() {
       let s = self.word_display(word);
-      map.insert(s, idx.to_u64());
+      let k = if let Some(char) = idx.get_char() {
+        -1-(char as i64)
+      } else {
+        idx.to_u64() as i64
+      };
+      map.insert(s, k);
     }
     let json = serde_json::to_string_pretty(&map).unwrap();
     write!(w, "{}", json)?;
@@ -24,10 +30,16 @@ where
   }
 
   fn decode_vocab(&self, r: &mut dyn std::io::Read) -> MyResult<BTreeMap<I, Word<C>>> {
-    let map: OrderMap<String, u64> = serde_json::from_reader(BufReader::new(r))?;
+    let map: OrderMap<String, i64> = serde_json::from_reader(BufReader::new(r))?;
     map.into_iter().map(|(s, idx)| {
       let word = self.word_parse(&s)?;
-      Ok((I::from_u64(idx), word))
+      let i = if idx < 0 {
+        let c = (-1 - idx) as u32;
+        I::from_char(char::from_u32(c).unwrap()).unwrap()
+      } else {
+        I::from_u64(idx as u64)
+      };
+      Ok((i, word))
     }).collect()
   }
 

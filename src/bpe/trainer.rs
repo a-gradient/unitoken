@@ -101,14 +101,6 @@ where
     }
   }
 
-  pub fn vocab_get(&self, idx: I) -> MyResult<&Word<C>> {
-
-    self
-      .vocab
-      .get(&idx)
-      .ok_or_else(|| MyError::OovIdx(idx.to_u64()))
-  }
-
   pub fn init_training(&mut self) where I: HasChar<C>, for<'a> &'a str: ToWord<C> {
     debug!("Initializing BPE training with {} words", self.words.len());
     self.pre_merges.clear();
@@ -178,6 +170,8 @@ where
     // println!("Merge {:?} (freq={}) into idx {}", merge.tp, merge.data.freq, target_idx);
     let merge = merge.with_target(target_idx);
     let merged_word = merge.merged_content();
+    self.vocab.entry(merge.tp.0).or_insert_with(|| merge.content.0.clone());
+    self.vocab.entry(merge.tp.1).or_insert_with(|| merge.content.1.clone());
     self.vocab.insert(target_idx, merged_word);
     assert_eq!(-changes.get(&merge.tp).map(|i| i.freq).unwrap_or(0), merge.data.freq);
     metrics::histogram!("bpe_trainer.changes").record(changes.len() as f64);

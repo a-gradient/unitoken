@@ -125,6 +125,12 @@ impl<C: std::hash::Hash + Send + Sync + 'static> Cachable for C { }
 pub trait IdxLike: Ord + std::hash::Hash + Eq + Copy + Send + Sync + 'static {
   fn from_u64(v: u64) -> Self;
   fn to_u64(self) -> u64;
+  fn decode_from_u64(v: u64, start: u64) -> Option<Self> {
+    Some(Self::from_u64(v - start))
+  }
+  fn encode_to_u64(&self, start: u64) -> u64 {
+    self.to_u64() + start
+  }
 }
 impl IdxLike for Idx {
   fn from_u64(v: u64) -> Self {
@@ -152,6 +158,7 @@ pub trait CharToIdx<I: IdxLike> {
 
 pub trait HasChar<C>: Sized {
   fn get_char(self) -> Option<char>;
+  fn from_char(_c: char) -> Option<Self> { None }
   fn idx_to_word(self) -> Option<Word<C>> where for<'a> &'a str: ToWord<C>{
     self.get_char().map(|i| i.to_string().to_word())
   }
@@ -179,6 +186,9 @@ impl<C> HasChar<C> for char {
   fn get_char(self) -> Option<char> {
     Some(self)
   }
+  fn from_char(c: char) -> Option<Self> {
+    Some(c)
+  }
 }
 impl CharToIdx<CharIdx> for u8 {
   fn char_to_idx(&self, start: u64) -> CharIdx {
@@ -191,6 +201,9 @@ impl<C> HasChar<C> for CharIdx {
       CharIdx::Char(c) => Some(c),
       CharIdx::Idx(_) => None,
     }
+  }
+  fn from_char(c: char) -> Option<Self> {
+    Some(CharIdx::Char(c))
   }
 }
 impl CharToIdx<CharIdx> for Character {
