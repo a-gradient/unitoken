@@ -149,9 +149,21 @@ impl IdxLike for CharIdx {
 pub trait CharToIdx<I: IdxLike> {
   fn char_to_idx(&self, start: u64) -> I;
 }
+
+pub trait HasChar<C>: Sized {
+  fn get_char(self) -> Option<char>;
+  fn idx_to_word(self) -> Option<Word<C>> where for<'a> &'a str: ToWord<C>{
+    self.get_char().map(|i| i.to_string().to_word())
+  }
+}
 impl CharToIdx<Idx> for u8 {
   fn char_to_idx(&self, start: u64) -> Idx {
     (*self as u64 + start) as Idx
+  }
+}
+impl<C> HasChar<C> for Idx {
+  fn get_char(self) -> Option<char> {
+    None
   }
 }
 impl CharToIdx<CharIdx> for char {
@@ -163,9 +175,22 @@ impl CharToIdx<CharIdx> for char {
     }
   }
 }
+impl<C> HasChar<C> for char {
+  fn get_char(self) -> Option<char> {
+    Some(self)
+  }
+}
 impl CharToIdx<CharIdx> for u8 {
   fn char_to_idx(&self, start: u64) -> CharIdx {
     CharIdx::Idx((*self as u64 + start) as Idx)
+  }
+}
+impl<C> HasChar<C> for CharIdx {
+  fn get_char(self) -> Option<char> {
+    match self {
+      CharIdx::Char(c) => Some(c),
+      CharIdx::Idx(_) => None,
+    }
   }
 }
 impl CharToIdx<CharIdx> for Character {

@@ -23,6 +23,7 @@ where
   pub fn from_words<Iter: IntoIterator<Item = (String, Freq)>>(words: Iter, special_tokens: &[String]) -> Self
   where
     C: CharToIdx<I>,
+    I: HasChar<C>,
   {
     let vocab_start_idx = special_tokens.len() as u64;
     let mut tokens = Vec::new();
@@ -85,7 +86,9 @@ where
 
 impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
 where
-  Word<C>: WordDebugExt
+  Word<C>: WordDebugExt,
+  I: HasChar<C>,
+  for<'a> &'a str: ToWord<C>,
 {
   pub fn new(init_vocab: BTreeMap<I, Word<C>>) -> Self {
     Self {
@@ -98,16 +101,27 @@ where
     }
   }
 
-  pub fn init_training(&mut self) {
+  pub fn vocab_get(&self, idx: I) -> MyResult<&Word<C>> {
+
+    self
+      .vocab
+      .get(&idx)
+      .ok_or_else(|| MyError::OovIdx(idx.to_u64()))
+  }
+
+  pub fn init_training(&mut self) where I: HasChar<C>, for<'a> &'a str: ToWord<C> {
     debug!("Initializing BPE training with {} words", self.words.len());
     self.pre_merges.clear();
+    let vocab_get = |i: I| {
+      self.vocab.get(&i).cloned().or_else(|| i.idx_to_word()).ok_or_else(|| MyError::OovIdx(i.to_u64()))
+    };
     for (i, word) in self.words.iter().enumerate() {
       for (j1, j2) in word.idxs.iter().copied().zip(word.idxs.iter().skip(1).copied()) {
         let tp = (j1, j2);
         let merge = self.pre_merges.entry(tp).or_insert_with(|| {
           let content = (
-            self.vocab.get(&j1).ok_or_else(|| MyError::OovIdx(j1.to_u64())).unwrap().clone(),
-            self.vocab.get(&j2).ok_or_else(|| MyError::OovIdx(j2.to_u64())).unwrap().clone(),
+            vocab_get(j1).unwrap(),
+            vocab_get(j2).unwrap(),
           );
           Merge::new(tp, content)
         });
@@ -363,9 +377,9 @@ mod tests {
 
   #[test]
   fn test_bpe_from_words_uni() {
-    const NAME: &str = "tinystories_sample_5M";
+    // const NAME: &str = "tinystories_sample_5M";
     // const NAME: &str = "TinyStoriesV2-GPT4-train";
-    // const NAME: &str = "TinyStories_all_data_zh_1M-sample";
+    const NAME: &str = "TinyStories_all_data_zh_1M-sample";
     let spec = crate::spec::uni::UniSpec;
     let input = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();

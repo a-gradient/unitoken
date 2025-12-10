@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
-use crate::spec::WordDisplay;
+use crate::{MyError, MyResult, spec::WordDisplay};
 
 use super::*;
 
@@ -144,10 +144,20 @@ where
   changes
 }
 
+pub(crate) fn _vocab_get<C, I>(vocab: &BTreeMap<I, Word<C>>, idx: I) -> MyResult<Word<C>>
+where
+  C: Clone,
+  I: IdxLike + HasChar<C>,
+  for<'a> &'a str: ToWord<C>,
+{
+  vocab.get(&idx).cloned().or_else(|| idx.idx_to_word()).ok_or_else(|| MyError::OovIdx(idx.to_u64()))
+}
+
 pub(crate) fn _update_merge_map<C, I>(merge_map: &mut HashMap<(I, I), Merge<C, I>>, merge: &Merge<C, I>, changes: BTreeMap<(I, I), MergeData>, vocab: Option<&BTreeMap<I, Word<C>>>)
 where
-  I: Ord + std::hash::Hash + Eq + Copy,
+  I: IdxLike + HasChar<C>,
   C: Clone,
+  for<'a> &'a str: ToWord<C>,
   Word<C>: WordDebugExt,
 {
   for (tp, data) in changes {
@@ -163,8 +173,8 @@ where
       hash_map::Entry::Vacant(e) => {
         if let Some(vocab) = vocab {
           let content = (
-            vocab.get(&tp.0).unwrap().clone(),
-            vocab.get(&tp.1).unwrap().clone(),
+            _vocab_get(vocab, tp.0).unwrap(),
+            _vocab_get(vocab, tp.1).unwrap(),
           );
           e.insert(Merge::new(tp, content))
         } else {
