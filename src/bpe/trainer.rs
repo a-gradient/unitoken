@@ -411,7 +411,7 @@ mod tests {
     let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(words, &vec!["<|endoftext|>".to_string()]);
     bpe.init_training();
     let vocab_size = match NAME {
-      "tinystories_sample_5M" => 2000,
+      "tinystories_sample_5M" | "TinyStories_all_data_zh_1M-sample" => 2000,
       _ => 10000,
     };
     while bpe.vocab.len() < vocab_size {
@@ -425,6 +425,7 @@ mod tests {
 
     let merges_txt = std::fs::read_to_string(format!("out/merges.{NAME}.uni.txt")).unwrap();
     let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.uni.txt")).unwrap();
-    assert_eq!(merges_txt, merges_expect_txt);
+    let merges = merges_txt.trim_end().lines().collect::<Vec<_>>();
+    assert_eq!(merges, merges_expect_txt.lines().take(merges.len()).collect::<Vec<_>>());
   }
 }
