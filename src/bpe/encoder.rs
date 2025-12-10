@@ -2,6 +2,7 @@ use std::{collections::{BTreeMap, HashMap}, path::Path};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
+use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
   MyError, MyResult,
@@ -372,6 +373,7 @@ where
   {
     let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
     let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
+    let path = path.as_ref().to_path_buf();
     let params = boundaries
       .iter()
       .zip(boundaries.iter().skip(1))
@@ -380,14 +382,16 @@ where
       .collect::<Vec<_>>();
 
     debug!("Start encoding file in {num_chunks} chunks...");
-    let segments_tokens_index = params.into_iter()
-      .map(|(_index, offset, len)| {
+    let mut segments_tokens_index = params.into_par_iter()
+      .map(|(index, offset, len)| {
         let tokens_index = get_tokens_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
-        self.encode_tokens_index(tokens_index)
+        self.encode_tokens_index(tokens_index).map(|idxs| (index, idxs))
       }).collect::<MyResult<Vec<_>>>()?;
 
     debug!("Finished encoding segments, merging results...");
-    let result = segments_tokens_index.into_iter().flatten().collect::<Vec<_>>();
+    segments_tokens_index.sort_by(|(ida, _), (idb, _)| { ida.cmp(idb) });
+
+    let result = segments_tokens_index.into_iter().map(|(_, idxs)| idxs).flatten().collect::<Vec<_>>();
     Ok(result)
   }
 
