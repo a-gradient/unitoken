@@ -195,7 +195,7 @@ where
     Ok(words.into_iter().map(|i| i.idxs.to_word()).collect())
   }
 
-  #[hotpath::measure]
+  // #[hotpath::measure]
   pub fn encode_words<S: AsRef<str>, I: IntoIterator<Item = S>>(&self, input: I) -> MyResult<Vec<Word<Idx>>>
   where
     for<'a> &'a str: ToWord<C>,
@@ -252,7 +252,7 @@ where
     Ok(words.into_iter().next().unwrap().idxs.to_word())
   }
 
-  #[hotpath::measure]
+  // #[hotpath::measure]
   pub fn encode_word(&self, input: &str) -> MyResult<Word<Idx>>
   where
     for<'a> &'a str: ToWord<C>,
@@ -265,7 +265,7 @@ where
     Ok(result)
   }
 
-  #[hotpath::measure]
+  // #[hotpath::measure]
   fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>>
   where
     for<'a> &'a str: ToWord<C>,
@@ -289,7 +289,7 @@ where
     return Ok(res);
   }
 
-  #[hotpath::measure]
+  // #[hotpath::measure]
   fn encode_tokens_index(&self, tokens_index: HashMap<SplitToken, Vec<usize>>) -> MyResult<Vec<Idx>> {
     let total = tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum();
     let mut result: Vec<&[Idx]> = vec![&[]; total];
@@ -320,7 +320,7 @@ where
     Ok(final_result)
   }
 
-  #[hotpath::measure]
+  // #[hotpath::measure]
   fn _create_cache_from_words(
     &self, input: Vec<String>
   ) -> MyResult<OrderMap<String, Arc<[Idx]>>>
