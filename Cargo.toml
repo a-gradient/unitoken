@@ -18,11 +18,12 @@ tracing-subscriber = "0.3.22"
 metrics = "0.24.3"
 serde = { version = "1.0.228", features = ["derive"] }
 chrono = "0.4.42"
-textplots = "0.8.7"
-rgb = "0.8.52"
+textplots = { version = "0.8.7", optional = true }
+rgb = { version = "0.8.52", optional = true } # optional for textplots
 indicatif = "0.18.3"
 hotpath = "0.8.0"
-npyz = { version = "0.8.4", features = ["npz"] }
+npyz = { version = "0.8.4" }
+pyo3 = { version = "0.27.2", optional = true }
 
 [profile.dev.package."*"]
 opt-level = 2
@@ -37,5 +38,10 @@ debug = "line-tables-only"
 # RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
 
 [features]
-default = []
+default = ["plot", "py"]
 hotpath = ["hotpath/hotpath", "hotpath/hotpath-alloc"]
+
+fmt-npz = ["npyz/npz"]
+
+plot = ["dep:textplots", "dep:rgb"]
+py = ["dep:pyo3"]

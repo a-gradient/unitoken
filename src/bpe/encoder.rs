@@ -77,6 +77,7 @@ where
     Ok(())
   }
 
+  #[cfg(feature = "fmt-npz")]
   #[hotpath::measure]
   pub fn save_idxs_npz<P: AsRef<Path>>(&self, file_path: P, idxs: Vec<Idx>) -> MyResult<()> {
     let mut file = std::fs::File::create(file_path)?;

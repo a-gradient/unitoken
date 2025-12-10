@@ -3,7 +3,6 @@ extern crate tracing;
 
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
-use rgb::Rgb;
 use std::{
   collections::BTreeMap, fs, io::BufReader, path::{Path, PathBuf}, sync::Arc
 };
@@ -27,6 +26,7 @@ struct Cli {
 enum Commands {
   Train(TrainArgs),
   Encode(EncodeArgs),
+  #[cfg(feature = "plot")]
   Plot(PlotArgs),
 }
 
@@ -35,6 +35,7 @@ impl Commands {
     match self {
       Commands::Train(args) => args.verbose,
       Commands::Encode(args) => args.verbose,
+      #[cfg(feature = "plot")]
       Commands::Plot(args) => args.verbose,
     }
   }
@@ -43,6 +44,7 @@ impl Commands {
     match self {
       Commands::Train(args) => &args.out_dir,
       Commands::Encode(args) => &args.out_dir,
+      #[cfg(feature = "plot")]
       Commands::Plot(args) => &args.out_dir,
     }
   }
@@ -51,6 +53,7 @@ impl Commands {
     match self {
       Commands::Train(args) => &args.input_file,
       Commands::Encode(args) => &args.input_file,
+      #[cfg(feature = "plot")]
       Commands::Plot(args) => &args.input_file,
     }
   }
@@ -387,9 +390,7 @@ fn main() {
     .and_then(|n| n.to_str())
     .unwrap_or("noname")
     .to_string();
-  if !matches!(cli.command, Commands::Plot(_)) {
-    _metrics::init_metrics().expect("Failed to initialize metrics recorder");
-  }
+
   std::thread::spawn({
     let metrics_snapshot_file = metrics_dir.join(format!("metrics_snapshot-[{}]-tmp.json", name));
     move || loop {
@@ -408,11 +409,15 @@ fn main() {
   debug!("Verbosity level: {}", verbose);
   match cli.command {
     Commands::Train(train_args) => {
+      _metrics::init_metrics().expect("Failed to initialize metrics recorder");
       run_train(train_args);
     }
     Commands::Encode(encode_args) => {
+      _metrics::init_metrics().expect("Failed to initialize metrics recorder");
       run_encode(encode_args);
     }
+
+    #[cfg(feature = "plot")]
     Commands::Plot(plot_args) => {
       debug!("Plotting metrics...");
       let input_file = plot_args.input_file;
@@ -435,11 +440,14 @@ fn main() {
     &snapshot,
   ).ok();
   debug!("Metrics snapshot saved to {}", metrics_snapshot_file.display());
+  #[cfg(feature = "plot")]
   plot_metrics(&snapshot);
 }
 
+#[cfg(feature = "plot")]
 fn plot_metrics(metrics: &_metrics::MetricsSnapshot) {
   use textplots::*;
+  use rgb::Rgb;
   for (name, block) in &metrics.gauges {
     let data = block.timestamps.iter().zip(&block.values).map(|(i, v)| (*i as f32, *v as f32)).collect::<Vec<_>>();
     if data.is_empty() {
