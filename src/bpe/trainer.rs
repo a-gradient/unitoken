@@ -107,7 +107,31 @@ where
     let vocab_get = |i: I| {
       self.vocab.get(&i).cloned().or_else(|| i.idx_to_word()).ok_or_else(|| MyError::OovIdx(i.to_u64()))
     };
+    let i_none = I::from_u64(u64::MAX);
+    let w_none = char::from_u32(0x10FFFF).unwrap().to_string().to_word();
     for (i, word) in self.words.iter().enumerate() {
+      // for single char tokens
+      // this for loop should takes no effects then <C=u8>.
+      // note: all idx in vocab should be CharIdx::Idx
+      for j in word.idxs.iter() {
+        // ascii chars, j should be CharIdx::Idx
+        if self.vocab.contains_key(j) {
+          continue;
+        }
+        // for unicode, j should be CharIdx::Char
+        let tp = (i_none, *j);
+        let merge = self.pre_merges.entry(tp).or_insert_with(|| {
+          let content = (
+            // w_none goes 0x10FFFF, which should have precedence over any valid pair when sort. (lexicographically largest)
+            w_none.clone(),
+            vocab_get(*j).unwrap(),
+          );
+          // set merge.target = Some(j) to indicate this is a single char token.
+          // see also [`Self::step`]
+          Merge::new(tp, content).with_target(*j)
+        });
+        merge.data.freq += word.freq;
+      }
       for (j1, j2) in word.idxs.iter().copied().zip(word.idxs.iter().skip(1).copied()) {
         let tp = (j1, j2);
         let merge = self.pre_merges.entry(tp).or_insert_with(|| {
@@ -166,12 +190,19 @@ where
       self._get_largest_merge2()?
     };
     let target_idx = self._add_vocab_idx();
+    // if target = Some(j), this is a single char token, no need to merge.
+    // but we have to add it to vocab.
+    if merge.target.is_some() {
+      self.vocab.insert(target_idx, merge.content.1.clone());
+      self.pre_merges.remove(&merge.tp);
+      return Some(target_idx);
+    }
     let changes = self.merge(&merge, target_idx);
     // println!("Merge {:?} (freq={}) into idx {}", merge.tp, merge.data.freq, target_idx);
     let merge = merge.with_target(target_idx);
     let merged_word = merge.merged_content();
-    self.vocab.entry(merge.tp.0).or_insert_with(|| merge.content.0.clone());
-    self.vocab.entry(merge.tp.1).or_insert_with(|| merge.content.1.clone());
+    // self.vocab.entry(merge.tp.0).or_insert_with(|| merge.content.0.clone());
+    // self.vocab.entry(merge.tp.1).or_insert_with(|| merge.content.1.clone());
     self.vocab.insert(target_idx, merged_word);
     assert_eq!(-changes.get(&merge.tp).map(|i| i.freq).unwrap_or(0), merge.data.freq);
     metrics::histogram!("bpe_trainer.changes").record(changes.len() as f64);
@@ -393,7 +424,7 @@ mod tests {
     bpe.save_merges_txt(&spec, std::fs::File::create(format!("out/merges.{NAME}.uni.txt")).unwrap()).unwrap();
 
     let merges_txt = std::fs::read_to_string(format!("out/merges.{NAME}.uni.txt")).unwrap();
-    // let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.uni.txt")).unwrap();
-    // assert_eq!(merges_txt, merges_expect_txt);
+    let merges_expect_txt = std::fs::read_to_string(format!("fixtures/merges.{NAME}.uni.txt")).unwrap();
+    assert_eq!(merges_txt, merges_expect_txt);
   }
 }

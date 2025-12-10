@@ -22,8 +22,8 @@ pub enum Character {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CharIdx {
-  Idx(Idx),
   Char(char),
+  Idx(Idx),
 }
 
 #[derive(Debug)]
