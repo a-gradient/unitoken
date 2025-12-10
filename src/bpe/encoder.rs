@@ -290,27 +290,27 @@ where
   }
 
   // #[hotpath::measure]
-  fn encode_tokens_index(&self, tokens_index: HashMap<SplitToken, Vec<usize>>) -> MyResult<Vec<Idx>> {
-    let total = tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum();
+  fn encode_tokens_index(&self, tokens_index: &HashMap<String, Vec<usize>>, special_tokens_index: &HashMap<String, Vec<usize>>) -> MyResult<Vec<Idx>> {
+    let tokens_num = tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum::<usize>();
+    let special_tokens_num = special_tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum::<usize>();
+    let total = tokens_num + special_tokens_num;
     let mut result: Vec<&[Idx]> = vec![&[]; total];
 
-    let query = tokens_index.iter().filter(|(k, _)| !k.is_special()).collect::<Vec<_>>();
-    let input = query.iter().map(|(k, _)| k.as_str().to_string());
+    let input = tokens_index.iter().map(|(token, _)| token).collect::<Vec<_>>();
     let output = self.encode_words(input)?;
-    for ((_token, doc_idxs), w) in query.iter().zip(output.iter()) {
+    for ((_token, doc_idxs), w) in tokens_index.iter().zip(output.iter()) {
       for doc_idx in doc_idxs.iter() {
         result[*doc_idx] = &w;
       }
     }
 
-    let special_query = tokens_index.iter().filter(|(k, _)| k.is_special()).collect::<Vec<_>>();
-    let special_output = special_query.iter()
+    let special_output = special_tokens_index.iter()
       .map(|(token, _)| {
-        let idx = self.special_tokens.get(token.as_str()).ok_or_else(|| MyError::Oov(token.as_str().to_string()))?;
+        let idx = self.special_tokens.get(token).ok_or_else(|| MyError::Oov(token.to_string()))?;
         Ok(vec![*idx].to_word())
       })
       .collect::<MyResult<Vec<_>>>()?;
-    for ((_token, doc_idxs), w) in special_query.iter().zip(special_output.iter()) {
+    for ((_token, doc_idxs), w) in special_tokens_index.iter().zip(special_output.iter()) {
       for doc_idx in doc_idxs.iter() {
         result[*doc_idx] = &w;
       }
@@ -389,8 +389,8 @@ where
     debug!("Start encoding file in {num_chunks} chunks...");
     let mut segments_tokens_index = params.into_par_iter()
       .map(|(index, offset, len)| {
-        let tokens_index = get_tokens_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
-        self.encode_tokens_index(tokens_index).map(|idxs| (index, idxs))
+        let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
+        self.encode_tokens_index(&tokens_index, &special_tokens_index).map(|idxs| (index, idxs))
       }).collect::<MyResult<Vec<_>>>()?;
 
     debug!("Finished encoding segments, merging results...");

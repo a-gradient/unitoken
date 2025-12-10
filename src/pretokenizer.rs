@@ -33,13 +33,12 @@ pub fn pretokenizer_counter(s: &str, pat: &Regex) -> MyResult<BTreeMap<String, F
   Ok(result)
 }
 
-pub fn pretokenizer_tokens(s: &str, pat: &Regex) -> MyResult<Vec<String>> {
+pub fn pretokenizer_tokens<'a>(s: &'a str, pat: &Regex) -> MyResult<Vec<&'a str>> {
   let mut result = Vec::new();
   for i in pat.find_iter(s) {
     match i {
       Ok(m) => {
-        let token = m.as_str().to_string();
-        result.push(token);
+        result.push(m.as_str());
       }
       Err(e) => {
         return Err(MyError::Regex(e));
@@ -208,23 +207,33 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
 #[hotpath::measure]
 pub fn get_tokens_index_from_segment<P: AsRef<Path>>(
   path: P, re_special_tokens: &Regex, offset: u64, len: usize,
-) -> MyResult<HashMap<SplitToken, Vec<usize>>> {
+) -> MyResult<(HashMap<String, Vec<usize>>, HashMap<String, Vec<usize>>)> {
   let _span = trace_span!("get_tokens_index_from_segment", offset = offset, len = len).entered();
 
   metrics::counter!("get_tokens_index_from_segment.calls").increment(1);
   let buffer = read_file_to_buffer(&path, offset, len)?;
-
   let content = String::from_utf8_lossy(&buffer);
   let parts = split_special_tokens(&content, &re_special_tokens)?;
-  let mut tokens_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
+  let mut tokens_index: HashMap<String, Vec<usize>> = HashMap::new();
+  let mut special_tokens_index: HashMap<String, Vec<usize>> = HashMap::new();
   let mut doc_idx = 0;
   for part in parts.iter() {
     if part.is_special() {
-      tokens_index.entry(SplitToken::Special(part.as_str().to_string())).or_default().push(doc_idx);
+      let doc_idxs = special_tokens_index.get_mut(part.as_str());
+      if let Some(doc_idxs) = doc_idxs {
+        doc_idxs.push(doc_idx);
+      } else {
+        special_tokens_index.insert(part.as_str().to_string(), vec![doc_idx]);
+      }
       doc_idx += 1;
     } else {
       for token in pretokenizer_tokens(part.as_str(), &RE)? {
-        tokens_index.entry(SplitToken::Token(token)).or_default().push(doc_idx);
+        let doc_idxs = tokens_index.get_mut(token);
+        if let Some(doc_idxs) = doc_idxs {
+          doc_idxs.push(doc_idx);
+        } else {
+          tokens_index.insert(token.to_string(), vec![doc_idx]);
+        }
         doc_idx += 1;
       }
     }
@@ -234,7 +243,7 @@ pub fn get_tokens_index_from_segment<P: AsRef<Path>>(
   metrics::counter!("get_tokens_index_from_segment.len").increment(len as _);
 
   trace!(tokens_index_len=?tokens_index.len(), "result");
-  Ok(tokens_index)
+  Ok((tokens_index, special_tokens_index))
 }
 
 pub fn get_words_from_file<P: AsRef<Path>>(
@@ -264,62 +273,6 @@ pub fn get_words_from_file<P: AsRef<Path>>(
   Ok(words)
 }
 
-pub fn get_tokens_index_from_file<P: AsRef<Path>>(
-  path: P, num_chunks: u32, re_special_tokens: Regex, split_special_token: Option<&str>,
-) -> MyResult<HashMap<SplitToken, Vec<usize>>> {
-  let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
-  let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
-  let path = path.as_ref().to_path_buf();
-  let params = boundaries
-    .iter()
-    .zip(boundaries.iter().skip(1))
-    .enumerate()
-    .map(|(index , (start, end))| (index, *start, (*end - *start) as usize))
-    .collect::<Vec<_>>();
-
-  let mut segments_tokens_index = params
-    .into_par_iter()
-    .map(|(index, offset, len)| {
-      get_tokens_index_from_segment(&path, &re_special_tokens.clone(), offset, len)
-        .map(|segment_tokens_index| (index, segment_tokens_index))
-    })
-    .collect::<MyResult<Vec<_>>>()?;
-
-  segments_tokens_index.sort_by(|(chunk_id_a, _), (chunk_id_b, _)| chunk_id_a.cmp(chunk_id_b));
-  let mut segments_tokens_index = segments_tokens_index.into_iter().map(|(_, m)| m).collect::<Vec<_>>();
-  let token_nums = segments_tokens_index.iter().map( | words_index| {
-    words_index.values().map(|v| v.len()).sum::<usize>()
-  }).collect::<Vec<_>>();
-  let index_offset = prefix_sum(&token_nums);
-  for (segment_words_index, &start_index) in segments_tokens_index.iter_mut().zip(&index_offset) {
-    for idxs in segment_words_index.values_mut() {
-      for idx in idxs {
-        *idx += start_index;
-      }
-    }
-  }
-
-  let mut tokens_index: HashMap<SplitToken, Vec<usize>> = HashMap::new();
-
-  segments_tokens_index
-    .into_iter()
-    .flatten()
-    .for_each(|(token, doc_idxs)| {
-      tokens_index.entry(token).or_default().extend(doc_idxs);
-    });
-  Ok(tokens_index)
-}
-
-fn prefix_sum(v: &[usize]) -> Vec<usize> {
-  let mut result = Vec::with_capacity(v.len());
-  let mut sum = 0;
-  result.push(sum);
-  for i in v[..v.len()-1].iter() {
-    sum += i;
-    result.push(sum);
-  }
-  result
-}
 
 pub fn sort_words(words: &BTreeMap<String, Freq>) -> ordermap::OrderMap<String, Freq> {
   let mut word_freq_vec: Vec<(String, Freq)> = words.iter().map(|(k,v)| (k.clone(), *v)).collect();
@@ -435,29 +388,14 @@ mod tests {
   fn test_get_tokens_index_from_segment() {
     const NAME: &str = "tinystories_sample_5M";
     let path = format!("fixtures/{NAME}.txt");
-    let tokens_index = get_tokens_index_from_segment(
+    let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(
       &path,
       &create_special_token_regex(&["<|endoftext|>".to_string()]),
       0, 5242880,
     ).unwrap();
-    let idxs = tokens_index.get(&SplitToken::Token(" the".to_string())).unwrap();
+    let idxs = tokens_index.get(" the").unwrap();
     println!("the idxs length: {:?}", idxs.len());
-    assert_ne!( idxs.len(), 0);
-  }
-
-  #[test]
-  fn test_get_tokens_index_from_file() {
-    const NAME: &str = "tinystories_sample_5M";
-    let path = format!("fixtures/{NAME}.txt");
-    let num_chunks = 4;
-    let tokens_index = get_tokens_index_from_file(
-      path,
-      num_chunks,
-      create_special_token_regex(&["<|endoftext|>".to_string()]),
-      Some("<|endoftext|>"),
-    ).unwrap();
-    assert_ne!(tokens_index.len(), 0);
-    let tokens_index = tokens_index.into_iter().map(|(w, v)| (w.as_str().to_string(), v)).collect::<HashMap<_, _>>();
-    serde_json::to_writer_pretty(std::fs::File::create(format!("out/_tokens_index.{NAME}.json")).unwrap(), &tokens_index).unwrap();
+    assert_ne!(idxs.len(), 0);
+    assert_eq!(special_tokens_index.len(), 1)
   }
 }
