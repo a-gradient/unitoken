@@ -13,6 +13,10 @@ where
   Self: WordDisplay<C>,
   I: HasChar<C>,
 {
+  fn suffix(&self) -> Option<&str> {
+    Some("uni")
+  }
+
   fn encode_vocab(&self, w: &mut dyn std::io::Write, vocab: &BTreeMap<I, Word<C>>) -> MyResult<()> {
     let mut map = OrderMap::new();
     for (idx, word) in vocab.iter() {

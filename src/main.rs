@@ -9,8 +9,7 @@ use std::{
 };
 
 use unitoken::{
-  bpe::{BpeEncoder, BpeTrainer, Character, Idx},
-  pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec},
+  bpe::{BpeEncoder, BpeTrainer, CharIdx, Character, Idx}, traits::CanTrain, pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}
 };
 
 mod _metrics;
@@ -80,7 +79,7 @@ impl SpecEnum {
     }
   }
 
-  pub fn get_char(&self) -> Box<dyn Spec<Character, Idx>> {
+  pub fn get_char(&self) -> Box<dyn Spec<Character, CharIdx>> {
     match self {
       Self::Gpt2 => unimplemented!(),
       Self::Uni => Box::new(UniSpec),
@@ -100,6 +99,8 @@ struct TrainArgs {
   num_chunks: u32,
   #[arg(long, default_value = "gpt2")]
   spec: SpecEnum,
+  #[arg(long)]
+  output_spec: Option<SpecEnum>,
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
@@ -154,8 +155,55 @@ fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chu
   words
 }
 
+
+pub fn _bpe_train<C, I>(
+  words: BTreeMap<String, i64>, vocab_size: u32, special_tokens: &Vec<String>,
+) -> BpeTrainer<C, I>
+where
+  BpeTrainer<C, I>: CanTrain<C, I>,
+{
+  let mut bpe = BpeTrainer::<C, I>::from_words(words, special_tokens);
+  let start_vocab_idx = bpe.vocab.len();
+  bpe.init_training();
+
+  let bar = ProgressBar::new(vocab_size as u64);
+  bar.set_position(start_vocab_idx as u64);
+  for i in start_vocab_idx..vocab_size as usize {
+    if bpe.step().is_none() {
+      warn!(vocab_size=i, "No more merges can be made, stopping training early");
+      break;
+    }
+    bar.inc(1);
+  }
+  bar.finish();
+  bpe._metrics();
+  bpe
+}
+
+pub fn _bpe_save_train<C, I>(
+  bpe: &BpeTrainer<C, I>,
+  spec: &dyn Spec<C, I>,
+  out_dir: &std::path::Path,
+  name: &str,
+) where
+  BpeTrainer<C, I>: CanTrain<C, I>,
+{
+  let suffix = match spec.suffix() {
+    Some(s) => format!(".{}", s),
+    None => "".to_string(),
+  };
+  let vocab_filename = format!("vocab.{name}{suffix}.json");
+  let merges_filename = format!("merges.{name}{suffix}.txt");
+
+  let vocab_file = std::fs::File::create(out_dir.join(vocab_filename)).unwrap();
+  let merges_file = std::fs::File::create(out_dir.join(merges_filename)).unwrap();
+
+  bpe.save_vocab_json(spec, vocab_file).unwrap();
+  bpe.save_merges_txt(spec, merges_file).unwrap();
+}
+
 fn bpe_train<P: AsRef<Path>>(
-  path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf, spec: SpecEnum,
+  path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf, spec: SpecEnum, output_spec: SpecEnum,
 ) {
   fs::create_dir_all(out_dir).expect("Failed to create output directory");
 
@@ -175,31 +223,26 @@ fn bpe_train<P: AsRef<Path>>(
     special_tokens.clone(),
   );
 
-  info!("Training BPE model...");
-  let mut bpe = BpeTrainer::from_words(words, special_tokens);
-  let start_vocab_idx = bpe.vocab.len();
-  bpe.init_training();
+  match spec {
+    SpecEnum::Gpt2 => {
+      info!("Using GPT-2 BPE specification");
 
-  let bar = ProgressBar::new(vocab_size as u64);
-  bar.set_position(start_vocab_idx as u64);
-  for i in start_vocab_idx..vocab_size as usize {
-    if bpe.step().is_none() {
-      warn!(vocab_size=i, "No more merges can be made, stopping training early");
-      break;
+      info!("Training BPE model...");
+      let bpe = _bpe_train::<u8, Idx>(words, vocab_size, special_tokens);
+
+      info!("Saving BPE model...");
+      _bpe_save_train(&bpe, output_spec.get_u8().as_ref(), out_dir, file_stem);
     }
-    bar.inc(1);
+    SpecEnum::Uni => {
+      info!("Using Uni BPE specification");
+
+      info!("Training BPE model...");
+      let bpe = _bpe_train::<Character, CharIdx>(words, vocab_size, special_tokens);
+
+      info!("Saving BPE model...");
+      _bpe_save_train(&bpe, output_spec.get_char().as_ref(), out_dir, file_stem);
+    }
   }
-  bar.finish();
-  bpe._metrics();
-
-  info!("Saving BPE model...");
-  let vocab_filename = format!("vocab.{file_stem}.json");
-  let merges_filename = format!("merges.{file_stem}.txt");
-  let vocab_file = fs::File::create(out_dir.join(vocab_filename)).unwrap();
-  let merges_file = fs::File::create(out_dir.join(merges_filename)).unwrap();
-
-  bpe.save_vocab_json(spec.get_u8().as_ref(), vocab_file).unwrap();
-  bpe.save_merges_txt(spec.get_u8().as_ref(), merges_file).unwrap();
 }
 
 fn bpe_encode<P: AsRef<Path>>(path: P, vocab_path: P, merges_path: P, special_tokens: &Vec<String>, num_chunks: u32, out_file: &PathBuf, spec: SpecEnum) {
@@ -226,6 +269,9 @@ fn run_train(args: TrainArgs) {
   } else {
     lines_of(include_str!("../fixtures/default_special_tokens.txt"))
   };
+  let output_spec = args.output_spec.unwrap_or(args.spec);
+  debug!("Spec: {:?}", args.spec.as_str());
+  debug!("Output spec: {:?}", output_spec.as_str());
   debug!("Special tokens: {:?}", special_tokens);
   debug!("Vocabulary size: {}", args.vocab_size);
   debug!("Number of chunks: {}", args.num_chunks);
@@ -238,6 +284,7 @@ fn run_train(args: TrainArgs) {
     &special_tokens,
     &args.out_dir,
     args.spec,
+    output_spec,
   );
 }
 

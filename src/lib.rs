@@ -4,6 +4,7 @@ extern crate tracing;
 pub mod bpe;
 pub mod spec;
 pub mod pretokenizer;
+pub mod traits;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MyError {

@@ -6,6 +6,10 @@ pub mod gpt2;
 pub mod uni;
 
 pub trait Spec<Char, Idx> {
+  fn suffix(&self) -> Option<&str> {
+    None
+  }
+
   fn encode_vocab(&self, w: &mut dyn std::io::Write, vocab: &BTreeMap<Idx, Word<Char>>) -> MyResult<()>;
   fn decode_vocab(&self, r: &mut dyn std::io::Read) -> MyResult<BTreeMap<Idx, Word<Char>>>;
 
