@@ -3,6 +3,9 @@ name = "unitoken"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 fancy-regex = "0.16.2"
 lazy_static = "1.5.0"

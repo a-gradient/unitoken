@@ -5,6 +5,8 @@ pub mod bpe;
 pub mod spec;
 pub mod pretokenizer;
 pub mod traits;
+#[cfg(feature = "py")]
+pub mod py;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MyError {
@@ -30,6 +32,8 @@ pub enum MyError {
   OovBytes(String),
   #[error("No more step could be performed")]
   TrainStep,
+  #[error("Specification error: {0}")]
+  SpecError(String),
 }
 
 pub type MyResult<T> = Result<T, MyError>;

@@ -4,3 +4,8 @@ out/
 *.svg
 .cache
 uv.lock
+
+_lib.*.so
+__pycache__/
+merges.txt
+vocab.json
