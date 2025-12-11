@@ -28,6 +28,8 @@ pub enum MyError {
   OovIdx(u64),
   #[error("Out of vocabulary bytes: {0}")]
   OovBytes(String),
+  #[error("No more step could be performed")]
+  TrainStep,
 }
 
 pub type MyResult<T> = Result<T, MyError>;

@@ -4,11 +4,11 @@ extern crate tracing;
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
 use std::{
-  collections::BTreeMap, fs, io::BufReader, path::{Path, PathBuf}, sync::Arc
+  collections::BTreeMap, fs, io::BufReader, path::{Path, PathBuf}
 };
 
 use unitoken::{
-  bpe::{BpeEncoder, BpeTrainer, CharIdx, CharSplit, Character, Idx, utils::{ToWord, WordDebugExt}}, pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::CanTrain
+  bpe::{BpeEncoder, BpeTrainer, CharIdx, Character, Idx}, pretokenizer::{create_special_token_regex, get_words_from_file, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanEncode, CanTrain, Train}
 };
 
 mod _metrics;
@@ -183,7 +183,7 @@ where
   let bar = ProgressBar::new(vocab_size as u64);
   bar.set_position(start_vocab_idx as u64);
   for i in start_vocab_idx..vocab_size as usize {
-    if bpe.step().is_none() {
+    if bpe.step().is_err() {
       warn!(vocab_size=i, "No more merges can be made, stopping training early");
       break;
     }
@@ -261,9 +261,7 @@ fn bpe_train<P: AsRef<Path>>(
 
 fn bpe_encode<C>(input_path: impl AsRef<Path>, vocab_path: impl AsRef<Path>, merges_path: impl AsRef<Path>, special_tokens: Option<Vec<String>>, num_chunks: u32, out_file: &PathBuf, spec: &dyn Spec<C, Idx>, version: u8)
 where
-  C: Ord + std::hash::Hash + CharSplit + Clone + Send + Sync + 'static,
-  Arc<[C]>: WordDebugExt,
-  for<'a> &'a str: ToWord<C>,
+  BpeEncoder<C>: CanEncode<C, Idx>,
 {
   info!("Initializing BPE encoder...");
   let bpe = BpeEncoder::<C>::new_from_file(spec, vocab_path, merges_path, special_tokens).expect("create bpe encoder");

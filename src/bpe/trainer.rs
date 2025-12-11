@@ -1,12 +1,13 @@
 use std::{collections::{BTreeMap, HashMap}, sync::atomic::AtomicU64};
 
-use crate::{MyError, MyResult, spec::Spec};
+use crate::{MyError, MyResult, spec::Spec, traits::{CanTrain, Train}};
 
 use super::*;
 
 #[derive(Debug, Default)]
 pub struct BpeTrainer<C, I> {
   pub start_vocab_idx: AtomicU64,
+  pub _byte_vocab_start_idx: Option<u64>,
   pub special_tokens: Vec<String>,
   pub vocab: BTreeMap<I, Word<C>>,
   pub merges: Vec<Merge<C, I>>,
@@ -20,30 +21,22 @@ where
   u8: ToWord<C>,
   for<'a> &'a str: ToWord<C>,
 {
-  pub fn from_words<Iter: IntoIterator<Item = (String, Freq)>>(words: Iter, special_tokens: &[String]) -> Self
+  pub fn from_words<Iter: IntoIterator<Item = (S, Freq)>, S: AsRef<str>>(words: Iter, special_tokens: &[String]) -> Self
   where
     C: CharToIdx<I>,
     I: HasChar<C>,
   {
     let vocab_start_idx = special_tokens.len() as u64;
-    let mut tokens = Vec::new();
-    for (w, freq) in words {
-      if special_tokens.contains(&w) {
-        continue;
-      }
-      let src = w.to_word();
-      let idxs = src.iter().map(|b| b.char_to_idx(vocab_start_idx)).collect::<Vec<_>>();
-      let pre_token = PreToken {
-        src: src.clone(),
-        idxs,
-        freq,
-      };
-      tokens.push(pre_token);
-    }
-    let mut bpe = Self::new(Default::default());
+    let sp_set = special_tokens.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let tokens = Self::_words_to_tokens(words, vocab_start_idx, &sp_set);
+    Self::new(tokens, special_tokens.to_vec())
+  }
+
+  pub fn new(words: Vec<PreToken<C, I>>, special_tokens: Vec<String>) -> Self {
+    let mut bpe = Self::empty();
     bpe._vocab_insert_special_tokens(special_tokens);
     bpe._vocab_insert_all_single_byte();
-    bpe.words = tokens;
+    bpe.words = words;
     bpe
   }
 
@@ -56,7 +49,30 @@ where
     for i in 128u8..=255 {
       vocab.insert(I::from_u64(i as u64 + start_idx), i.to_word());
     }
+    self._byte_vocab_start_idx = Some(start_idx);
     I::from_u64(start_idx + 256)
+  }
+
+  pub fn _words_to_tokens<Iter: IntoIterator<Item = (S, Freq)>, S: AsRef<str>>(words: Iter, vocab_start_idx: u64, special_tokens: &BTreeSet<&str>) -> Vec<PreToken<C, I>>
+  where
+    C: CharToIdx<I>,
+  {
+    let mut tokens = Vec::new();
+    for (w, freq) in words.into_iter() {
+      let w = w.as_ref();
+      if special_tokens.contains(w) {
+        continue;
+      }
+      let src = w.to_word();
+      let idxs = src.iter().map(|b| b.char_to_idx(vocab_start_idx)).collect::<Vec<_>>();
+      let pre_token = PreToken {
+        src: src.clone(),
+        idxs,
+        freq: freq as Freq,
+      };
+      tokens.push(pre_token);
+    }
+    tokens
   }
 }
 
@@ -65,13 +81,14 @@ where
   Word<C>: WordDebugExt,
   for<'a> &'a str: ToWord<C>,
 {
-  pub fn _vocab_insert_special_tokens(&mut self, special_tokens: &[String]) -> I {
+  pub fn _vocab_insert_special_tokens(&mut self, special_tokens: Vec<String>) -> I {
     let length = special_tokens.len();
     let start_idx = self.start_vocab_idx.fetch_add(length as u64, std::sync::atomic::Ordering::AcqRel);
     let vocab = &mut self.vocab;
-    for (i, token) in special_tokens.into_iter().enumerate() {
+    for (i, token) in special_tokens.iter().enumerate() {
       vocab.insert(I::from_u64(i as u64 + start_idx), token.as_str().to_word());
     }
+    self.special_tokens.extend(special_tokens);
     I::from_u64(start_idx + length as u64)
   }
 
@@ -84,24 +101,27 @@ where
   }
 }
 
-impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
-where
-  Word<C>: WordDebugExt,
-  I: HasChar<C>,
-  for<'a> &'a str: ToWord<C>,
-{
-  pub fn new(init_vocab: BTreeMap<I, Word<C>>) -> Self {
+impl<C, I> BpeTrainer<C, I> {
+  pub fn empty() -> Self {
     Self {
-      start_vocab_idx: AtomicU64::new(init_vocab.len() as u64),
-      vocab: init_vocab,
+      start_vocab_idx: AtomicU64::new(0),
+      _byte_vocab_start_idx: None,
+      vocab: BTreeMap::new(),
       merges: Vec::new(),
       pre_merges: HashMap::new(),
       special_tokens: Vec::new(),
       words: Vec::new(),
     }
   }
+}
 
-  pub fn init_training(&mut self) where I: HasChar<C>, for<'a> &'a str: ToWord<C> {
+impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
+where
+  Word<C>: WordDebugExt,
+  I: HasChar<C>,
+  for<'a> &'a str: ToWord<C>,
+{
+  pub fn _build_pre_merges(&mut self) where I: HasChar<C>, for<'a> &'a str: ToWord<C> {
     debug!("Initializing BPE training with {} words", self.words.len());
     self.pre_merges.clear();
     let vocab_get = |i: I| {
@@ -144,7 +164,6 @@ where
         merge.add(i as u64, word.freq);
       }
     }
-    self._metrics();
   }
 
   fn _set_vocab_idx(&mut self, start_idx: I) {
@@ -181,7 +200,7 @@ where
       .cloned()
   }
 
-  pub fn step(&mut self) -> Option<I> where C: Ord + Send + Sync + 'static {
+  pub fn _step_parallel(&mut self) -> Option<I> where C: Ord + Send + Sync + 'static {
     // find the most frequent merge,
     // if the frequency is the same, choose the lexicographically largest one.
     let merge = if self.pre_merges.len() < 100_000 {
@@ -211,9 +230,6 @@ where
     metrics::histogram!("bpe_trainer.occurs_in").record(merge.data.occurs_in.len() as f64);
     metrics::histogram!("bpe_trainer.freq").record(merge.data.freq as f64);
     self.merges.push(merge);
-    if (target_idx.to_u64() + 1) % 100 == 0 {
-      self._metrics();
-    }
     Some(target_idx)
   }
 
@@ -238,6 +254,42 @@ where
     metrics::counter!("bpe_trainer.vocab_size").absolute(self.vocab.len() as u64);
     metrics::gauge!("bpe_trainer.pre_merges_count").set(self.pre_merges.len() as f64);
     metrics::gauge!("bpe_trainer.words_count").set(self.words.len() as f64);
+  }
+}
+
+impl<C, I> Train for BpeTrainer<C, I>
+where
+  Self: CanTrain<C, I>,
+{
+  fn new(special_tokens: Vec<String>) -> Self {
+    Self::new(vec![], special_tokens)
+  }
+
+  fn add_words(&mut self, words: &mut dyn Iterator<Item = (&str, Freq)>) {
+    let special_tokens = self.special_tokens.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let vocab_start_idx = self._byte_vocab_start_idx.unwrap();
+    self.words = Self::_words_to_tokens(words, vocab_start_idx, &special_tokens);
+  }
+
+  fn vocab_size(&self) -> usize {
+    self.vocab.len()
+  }
+
+  fn init_training(&mut self) {
+    self._build_pre_merges();
+    self._metrics();
+  }
+
+  fn step(&mut self) -> MyResult<()> {
+    if self._step_parallel().is_some() {
+      if self.vocab_size() % 100 == 0 {
+        self._metrics();
+      }
+      Ok(())
+    } else {
+      Err(MyError::TrainStep)
+    }
+
   }
 }
 
@@ -340,9 +392,9 @@ mod tests {
   #[test]
   fn test_bpe_step() {
     let mut bpe = BpeTrainer::<u8, Idx>::from_words(vec![
-      ("ababc".to_string(), 5),
-      ("ababcbabc".to_string(), 30),
-      ("abcbabcab".to_string(), 200),
+      ("ababc", 5),
+      ("ababcbabc", 30),
+      ("abcbabcab", 200),
     ], &vec![]);
     assert!(bpe.words.len() > 0);
     bpe.init_training();
