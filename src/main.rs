@@ -125,6 +125,8 @@ struct EncodeArgs {
   out_dir: PathBuf,
   #[arg(long = "vocab")]
   vocab_name: Option<String>,
+  #[arg(short='s', long)]
+  vocab_size: Option<usize>,
   #[arg(short = 'c', long = "chunks", default_value = "1024")]
   num_chunks: u32,
   #[arg(long = "version", default_value = "2")]
@@ -165,7 +167,7 @@ fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chu
   let sorted_words = sort_words(&words);
   debug!("Save words to {}", output.as_ref().display());
   let words_file = fs::File::create(output).unwrap();
-  save_words(words_file, &sorted_words).unwrap();
+  save_words(std::io::BufWriter::new(words_file), &sorted_words).unwrap();
   words
 }
 
@@ -259,12 +261,12 @@ fn bpe_train<P: AsRef<Path>>(
   }
 }
 
-fn bpe_encode<C>(input_path: impl AsRef<Path>, vocab_path: impl AsRef<Path>, merges_path: impl AsRef<Path>, special_tokens: Option<Vec<String>>, num_chunks: u32, out_file: &PathBuf, spec: &dyn Spec<C, Idx>, version: u8)
+fn bpe_encode<C>(input_path: impl AsRef<Path>, vocab_path: impl AsRef<Path>, merges_path: impl AsRef<Path>, special_tokens: Option<Vec<String>>, num_chunks: u32, out_file: &PathBuf, spec: &dyn Spec<C, Idx>, version: u8, vocab_size: Option<usize>)
 where
   BpeEncoder<C>: CanEncode<C, Idx>,
 {
   info!("Initializing BPE encoder...");
-  let bpe = BpeEncoder::<C>::new_from_file(spec, vocab_path, merges_path, special_tokens).expect("create bpe encoder");
+  let bpe = BpeEncoder::<C>::new_from_file(spec, vocab_path, merges_path, special_tokens, vocab_size).expect("create bpe encoder");
 
   info!("Encoding file: {}", input_path.as_ref().display());
   let idxs = match version {
@@ -354,6 +356,7 @@ fn run_encode(args: EncodeArgs) {
         &out_file,
         args.spec.get_u8().as_ref(),
         args.version,
+        args.vocab_size
       );
       return;
     }
@@ -369,6 +372,7 @@ fn run_encode(args: EncodeArgs) {
         &out_file,
         args.spec.get_char_idx().as_ref(),
         args.version,
+        args.vocab_size
       );
     }
   }
@@ -399,7 +403,7 @@ fn main() {
         continue;
       };
       serde_json::to_writer_pretty(
-        file,
+        std::io::BufWriter::new(file),
         &snapshot,
       ).ok();
     }

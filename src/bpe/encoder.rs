@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap}, io::BufWriter, path::Path};
+use std::{collections::{BTreeMap, HashMap}, io::BufWriter, path::Path, usize};
 
 use fancy_regex::Regex;
 use moka::sync::Cache;
@@ -40,14 +40,14 @@ where
   }
 
   pub fn new_from_file<P1: AsRef<Path>, P2: AsRef<Path>>(
-    spec: &dyn Spec<C, Idx>, vocab_path: P1, merges_path: P2, special_tokens: Option<Vec<String>>,
+    spec: &dyn Spec<C, Idx>, vocab_path: P1, merges_path: P2, special_tokens: Option<Vec<String>>, vocab_size: Option<usize>,
   ) -> MyResult<Self>
   where
     C: Clone
   {
     let vocab = Self::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
     let merges = Self::_load_merges(spec, std::fs::File::open(merges_path)?, &vocab)?;
-    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).take(vocab_size.unwrap_or(usize::MAX)).collect();
     let special_tokens = match special_tokens {
       Some(tokens) => tokens,
       None => Self::get_special_tokens_from_vocab(&vocab)?,
