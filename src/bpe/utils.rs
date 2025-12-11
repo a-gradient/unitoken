@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
-use crate::{MyError, MyResult, spec::WordDisplay};
+use crate::{MyError, MyResult, spec::WordDisplay, traits::CanStrToWord};
 
 use super::*;
 
@@ -88,7 +88,6 @@ impl WordDebugExt for Word<Character> {
 pub(crate) fn _merge<C, I>(words: &mut Vec<PreToken<C, I>>, merge: &Merge<C, I>, target_idx: I) -> BTreeMap<(I, I), MergeData>
 where
   I: Ord + Copy,
-  C: Clone,
 {
   // all tp with target_idx MUST be positive, so that occurs_in should be added.
   // while tp without target_idx MUST be negative, and occurs_in should be removed.
@@ -158,9 +157,8 @@ where
 
 pub(crate) fn _vocab_get<C, I>(vocab: &BTreeMap<I, Word<C>>, idx: I) -> MyResult<Word<C>>
 where
-  C: Clone,
+  C: CanStrToWord,
   I: IdxLike + HasChar<C>,
-  for<'a> &'a str: ToWord<C>,
 {
   vocab.get(&idx).cloned().or_else(|| idx.idx_to_word()).ok_or_else(|| MyError::OovIdx(idx.to_u64()))
 }
@@ -168,8 +166,7 @@ where
 pub(crate) fn _update_merge_map<C, I>(merge_map: &mut HashMap<(I, I), Merge<C, I>>, merge: &Merge<C, I>, changes: BTreeMap<(I, I), MergeData>, vocab: Option<&BTreeMap<I, Word<C>>>)
 where
   I: IdxLike + HasChar<C>,
-  C: Clone,
-  for<'a> &'a str: ToWord<C>,
+  C: CanStrToWord,
   Word<C>: WordDebugExt,
 {
   for (tp, data) in changes {

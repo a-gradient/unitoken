@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, sync::atomic::AtomicU64};
 
-use crate::{MyError, MyResult, spec::Spec, traits::{CanTrain, Train}};
+use crate::{MyError, MyResult, spec::Spec, traits::{CanStrToWord, CanToWord, CanTrain, Train}};
 
 use super::*;
 
@@ -15,11 +15,10 @@ pub struct BpeTrainer<C, I> {
   pub words: Vec<PreToken<C, I>>,
 }
 
-impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
+impl<C, I: IdxLike> BpeTrainer<C, I>
 where
   Word<C>: WordDebugExt,
-  u8: ToWord<C>,
-  for<'a> &'a str: ToWord<C>,
+  C: CanStrToWord + CanToWord<u8>,
 {
   pub fn from_words<Iter: IntoIterator<Item = (S, Freq)>, S: AsRef<str>>(words: Iter, special_tokens: &[String]) -> Self
   where
@@ -76,10 +75,9 @@ where
   }
 }
 
-impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
+impl<C: CanStrToWord, I: IdxLike> BpeTrainer<C, I>
 where
   Word<C>: WordDebugExt,
-  for<'a> &'a str: ToWord<C>,
 {
   pub fn _vocab_insert_special_tokens(&mut self, special_tokens: Vec<String>) -> I {
     let length = special_tokens.len();
@@ -115,13 +113,13 @@ impl<C, I> BpeTrainer<C, I> {
   }
 }
 
-impl<C: Clone, I: IdxLike> BpeTrainer<C, I>
+impl<C, I: IdxLike> BpeTrainer<C, I>
 where
   Word<C>: WordDebugExt,
   I: HasChar<C>,
-  for<'a> &'a str: ToWord<C>,
+  C: CanStrToWord,
 {
-  pub fn _build_pre_merges(&mut self) where I: HasChar<C>, for<'a> &'a str: ToWord<C> {
+  pub fn _build_pre_merges(&mut self) {
     debug!("Initializing BPE training with {} words", self.words.len());
     self.pre_merges.clear();
     let vocab_get = |i: I| {
@@ -200,21 +198,14 @@ where
       .cloned()
   }
 
-  pub fn _step_parallel(&mut self) -> Option<I> where C: Ord + Send + Sync + 'static {
-    // find the most frequent merge,
-    // if the frequency is the same, choose the lexicographically largest one.
-    let merge = if self.pre_merges.len() < 100_000 {
-      self._get_largest_merge()?
-    } else {
-      self._get_largest_merge2()?
-    };
+  pub fn _step(&mut self, merge: Merge<C, I>) -> I where C: Clone {
     let target_idx = self._add_vocab_idx();
     // if target = Some(j), this is a single char token, no need to merge.
     // but we have to add it to vocab.
     if merge.target.is_some() {
       self.vocab.insert(target_idx, merge.content.1.clone());
       self.pre_merges.remove(&merge.tp);
-      return Some(target_idx);
+      return target_idx;
     }
     let changes = self.merge(&merge, target_idx);
     // println!("Merge {:?} (freq={}) into idx {}", merge.tp, merge.data.freq, target_idx);
@@ -230,13 +221,12 @@ where
     metrics::histogram!("bpe_trainer.occurs_in").record(merge.data.occurs_in.len() as f64);
     metrics::histogram!("bpe_trainer.freq").record(merge.data.freq as f64);
     self.merges.push(merge);
-    Some(target_idx)
+    target_idx
   }
 
   pub fn finish(self) -> MyResult<BpeEncoder<C>>
   where
-    C: Ord + Cachable,
-    for<'a> &'a str: ToWord<C>,
+    C: Ord + Clone + Cachable,
   {
     let merges = self.merges
       .into_iter()
@@ -281,7 +271,15 @@ where
   }
 
   fn step(&mut self) -> MyResult<()> {
-    if self._step_parallel().is_some() {
+    // find the most frequent merge,
+    // if the frequency is the same, choose the lexicographically largest one.
+    let merge = if self.pre_merges.len() < 100_000 {
+      self._get_largest_merge()
+    } else {
+      self._get_largest_merge2()
+    };
+    if let Some(merge) = merge {
+      self._step(merge);
       if self.vocab_size() % 100 == 0 {
         self._metrics();
       }

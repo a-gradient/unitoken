@@ -49,12 +49,18 @@ impl<C, I> PreToken<C, I> {
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Merge<C, I> {
   pub tp: (I, I),
   pub content: (Word<C>, Word<C>),
   pub target: Option<I>,
   pub data: MergeData,
+}
+
+impl<C, I: Clone> Clone for Merge<C, I> {
+  fn clone(&self) -> Self {
+    Self { tp: self.tp.clone(), content: self.content.clone(), target: self.target.clone(), data: self.data.clone() }
+  }
 }
 
 impl<C, I> Merge<C, I> {

@@ -7,7 +7,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec,
+  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec, traits::CanStrToWord,
 };
 
 use super::*;
@@ -26,10 +26,10 @@ pub struct BpeEncoder<C = u8> {
   pub cache: Cache<String, Word<Idx>>,
 }
 
-impl<C: Ord + Clone + Cachable> BpeEncoder<C>
+impl<C: Ord + Cachable> BpeEncoder<C>
 where
   Word<C>: WordDebugExt,
-  for<'a> &'a str: ToWord<C>,
+  C: CanStrToWord,
 {
   fn _load_vocab<R: std::io::Read>(spec: &dyn Spec<C, Idx>, mut reader: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
     spec.decode_vocab(&mut reader)
@@ -41,7 +41,10 @@ where
 
   pub fn new_from_file<P1: AsRef<Path>, P2: AsRef<Path>>(
     spec: &dyn Spec<C, Idx>, vocab_path: P1, merges_path: P2, special_tokens: Option<Vec<String>>,
-  ) -> MyResult<Self> {
+  ) -> MyResult<Self>
+  where
+    C: Clone
+  {
     let vocab = Self::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
     let merges = Self::_load_merges(spec, std::fs::File::open(merges_path)?, &vocab)?;
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
@@ -92,7 +95,10 @@ where
     Ok(())
   }
 
-  pub fn new(vocab: BTreeMap<Idx, Word<C>>, merges: Vec<((Idx, Idx), Idx)>, special_tokens: Vec<String>) -> MyResult<Self> {
+  pub fn new(vocab: BTreeMap<Idx, Word<C>>, merges: Vec<((Idx, Idx), Idx)>, special_tokens: Vec<String>) -> MyResult<Self>
+  where
+    C: Clone
+  {
     let vocab_rev = vocab
       .iter()
       .map(|(k, v)| (v.clone(), *k))
@@ -140,7 +146,7 @@ impl<C> BpeEncoder<C>
 where
   C: Ord + Clone + Cachable + CharSplit,
   Word<C>: WordDebugExt,
-  for<'a> &'a str: ToWord<C>,
+  C: CanStrToWord,
 {
   pub fn _pretoken(&self, word: Word<C>, freq: Freq) -> MyResult<PreToken<C, Idx>> {
     let mut idxs = Vec::new();
@@ -213,10 +219,7 @@ where
   }
 
   // #[hotpath::measure]
-  pub fn encode_words<S: AsRef<str>, I: IntoIterator<Item = S>>(&self, input: I) -> MyResult<Vec<Word<Idx>>>
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  pub fn encode_words<S: AsRef<str>, I: IntoIterator<Item = S>>(&self, input: I) -> MyResult<Vec<Word<Idx>>> {
     let mut results = BTreeMap::new();
     let mut to_encode = Vec::new();
     let mut query = Vec::new();
@@ -270,10 +273,7 @@ where
   }
 
   // #[hotpath::measure]
-  pub fn encode_word(&self, input: &str) -> MyResult<Word<Idx>>
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  pub fn encode_word(&self, input: &str) -> MyResult<Word<Idx>> {
     if let Some(result) = self.cache.get(input) {
       return Ok(result);
     }
@@ -283,10 +283,7 @@ where
   }
 
   // #[hotpath::measure]
-  fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>>
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>> {
     let parts = split_special_tokens(&input, &self.re_special_tokens)?;
     let mut res = Vec::new();
     for part in parts.iter() {
@@ -340,10 +337,7 @@ where
   // #[hotpath::measure]
   fn _create_cache_from_words(
     &self, input: Vec<String>
-  ) -> MyResult<OrderMap<String, Arc<[Idx]>>>
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  ) -> MyResult<OrderMap<String, Arc<[Idx]>>> {
     let words = input.iter().map(|s| s.to_word()).collect::<Vec<_>>();
     let encoded = self._encode_words(&words)?;
     let mut cache = OrderMap::from_iter(input.into_iter().zip(encoded.into_iter()).rev().map(|(k, v)| (k, v)));
@@ -361,10 +355,7 @@ where
     self.special_tokens.iter().min_by_key(|(_, v)| *v).map(|(k, _)| k.as_str())
   }
 
-  pub fn with_cache(mut self, cache: OrderMap<String, Arc<[Idx]>>) -> Self
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  pub fn with_cache(mut self, cache: OrderMap<String, Arc<[Idx]>>) -> Self {
     let max_cap = cache.len() as u64 * 3 / 2;
     self.cache = Cache::new(max_cap);
     for (k, v) in cache {
@@ -375,10 +366,7 @@ where
 
   pub fn encode_file_with_cache<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
-  ) -> MyResult<Vec<Idx>>
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  ) -> MyResult<Vec<Idx>> {
     let split_special_token = self._split_special_token();
     let words = get_words_from_file(&path, num_chunks, self.re_special_tokens.clone(), split_special_token)?;
     let input = words.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
@@ -389,10 +377,7 @@ where
 
   pub fn encode_file_with_cache_v2<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
-  ) -> MyResult<Vec<Idx>>
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  ) -> MyResult<Vec<Idx>> {
     let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
     let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
     let path = path.as_ref().to_path_buf();
@@ -419,10 +404,7 @@ where
 
   pub fn _encode_file<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32
-  ) -> MyResult<Vec<Idx>>
-  where
-    for<'a> &'a str: ToWord<C>,
-  {
+  ) -> MyResult<Vec<Idx>> {
     // TODO: handle this
     let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
     let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;

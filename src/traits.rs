@@ -18,22 +18,19 @@ pub trait Train {
   }
 }
 
-pub trait CanToWord<C, T>
+pub trait CanToWord<T>: Sized
 where
-  Self: Imply<T, Is: ToWord<C>>,
+  Self: Imply<T, Is: ToWord<Self>>,
 {}
 
-impl<C, T> CanToWord<C, T> for C
+impl<C, T> CanToWord<T> for C
 where
   T: ToWord<C>,
 {}
 
-pub trait CanStrToWord<C>
-where
-  Self: for<'a> Imply<C, Is: CanToWord<C, &'a str>>,
-{}
+pub trait CanStrToWord: for<'a> CanToWord<&'a str> {}
 
-impl<C> CanStrToWord<C> for C
+impl<C> CanStrToWord for C
 where
   for<'a> &'a str: ToWord<C>,
 {}
@@ -42,7 +39,7 @@ pub trait CanTrain<C, I>
 where
   Self: Imply<Word<C>, Is: WordDebugExt>,
   Self: Imply<C, Is: Clone + Ord + Send + Sync + 'static>,
-  Self: Imply<C, Is: CharToIdx<I> + CanToWord<C, u8> + CanStrToWord<C>>,
+  Self: Imply<C, Is: CharToIdx<I> + CanToWord<u8> + CanStrToWord>,
   Self: Imply<I, Is: IdxLike + HasChar<C>>,
 {}
 
@@ -59,13 +56,13 @@ pub trait CanEncode<C, I>
 where
   Self: Imply<Word<C>, Is: WordDebugExt>,
   Self: Imply<C, Is: Ord + std::hash::Hash + Clone + Send + Sync + 'static>,
-  Self: Imply<C, Is: CharSplit + CanStrToWord<C>>,
+  Self: Imply<C, Is: CharSplit + CanStrToWord>,
   Self: Imply<I, Is: IdxLike>,
 {}
 
 impl<C> CanEncode<C, Idx> for BpeEncoder<C>
 where
-  C: Ord + std::hash::Hash + CharSplit + CanStrToWord<C> + Clone + Send + Sync + 'static,
+  C: Ord + std::hash::Hash + CharSplit + CanStrToWord + Clone + Send + Sync + 'static,
   Word<C>: WordDebugExt,
 {}
 
