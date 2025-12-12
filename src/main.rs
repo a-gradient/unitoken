@@ -60,14 +60,38 @@ impl Commands {
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
-pub enum SpecEnum {
+pub enum SpecLevel {
+  #[clap(name = "u8")]
+  U8,
+  #[clap(name = "char")]
+  Char,
+}
+
+impl SpecLevel {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Self::U8 => "u8",
+      Self::Char => "char",
+    }
+  }
+
+  pub fn default_spec(&self) -> SpecOutput {
+    match self {
+      Self::U8 => SpecOutput::Gpt2,
+      Self::Char => SpecOutput::Uni,
+    }
+  }
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum SpecOutput {
   #[clap(name = "gpt2")]
   Gpt2,
   #[clap(name = "uni")]
   Uni,
 }
 
-impl SpecEnum {
+impl SpecOutput {
   pub fn as_str(&self) -> &'static str {
     match self {
       Self::Gpt2 => "gpt2",
@@ -103,14 +127,16 @@ struct TrainArgs {
   verbose: u8,
   #[arg(short, long = "out", default_value = "out")]
   out_dir: PathBuf,
-  #[arg(short='s', long, default_value = "10000")]
+  #[arg(short='n', long, default_value = "10000")]
   vocab_size: u32,
-  #[arg(short = 'c', long = "chunks", default_value = "1024")]
+  #[arg(long = "chunks", default_value = "1024")]
   num_chunks: u32,
-  #[arg(long, default_value = "gpt2")]
-  spec: SpecEnum,
+  #[arg(short, long, default_value = "u8")]
+  char: SpecLevel,
   #[arg(long = "out-spec")]
-  output_spec: Option<SpecEnum>,
+  output_spec: Option<SpecOutput>,
+  #[arg(long = "vocab")]
+  vocab_name: Option<String>,
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
@@ -125,16 +151,16 @@ struct EncodeArgs {
   out_dir: PathBuf,
   #[arg(long = "vocab")]
   vocab_name: Option<String>,
-  #[arg(short='s', long)]
+  #[arg(short='n', long)]
   vocab_size: Option<usize>,
-  #[arg(short = 'c', long = "chunks", default_value = "1024")]
+  #[arg(long = "chunks", default_value = "1024")]
   num_chunks: u32,
   #[arg(long = "version", default_value = "2")]
   version: u8,
-  #[arg(long, default_value = "gpt2")]
-  spec: SpecEnum,
+  #[arg(long, default_value = "u8")]
+  char: SpecLevel,
   #[arg(long = "out-spec")]
-  output_spec: Option<SpecEnum>,
+  output_spec: Option<SpecOutput>,
   #[arg(long = "special-tokens")]
   special_tokens_path: Option<PathBuf>,
   #[arg(value_parser = clap::value_parser!(PathBuf))]
@@ -204,12 +230,8 @@ pub fn _bpe_save_train<C, I>(
 ) where
   BpeTrainer<C, I>: CanTrain<C, I>,
 {
-  let suffix = match spec.suffix() {
-    Some(s) => format!(".{}", s),
-    None => "".to_string(),
-  };
-  let vocab_filename = format!("vocab.{name}{suffix}.json");
-  let merges_filename = format!("merges.{name}{suffix}.txt");
+  let vocab_filename = format!("vocab.{name}.json");
+  let merges_filename = format!("merges.{name}.txt");
 
   let vocab_file = std::fs::File::create(out_dir.join(vocab_filename)).unwrap();
   let merges_file = std::fs::File::create(out_dir.join(merges_filename)).unwrap();
@@ -219,7 +241,7 @@ pub fn _bpe_save_train<C, I>(
 }
 
 fn bpe_train<P: AsRef<Path>>(
-  path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf, spec: SpecEnum, output_spec: SpecEnum,
+  path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf, spec: SpecLevel, output_spec: SpecOutput, vocab_name: String,
 ) {
   fs::create_dir_all(out_dir).expect("Failed to create output directory");
 
@@ -240,23 +262,23 @@ fn bpe_train<P: AsRef<Path>>(
   );
 
   match spec {
-    SpecEnum::Gpt2 => {
+    SpecLevel::U8 => {
       info!("Using GPT-2 BPE specification");
 
       info!("Training BPE model...");
       let bpe = _bpe_train::<u8, Idx>(words, vocab_size, special_tokens);
 
       info!("Saving BPE model...");
-      _bpe_save_train(&bpe, output_spec.get_u8().as_ref(), out_dir, file_stem);
+      _bpe_save_train(&bpe, output_spec.get_u8().as_ref(), out_dir, &vocab_name);
     }
-    SpecEnum::Uni => {
+    SpecLevel::Char => {
       info!("Using Uni BPE specification");
 
       info!("Training BPE model...");
       let bpe = _bpe_train::<Character, CharIdx>(words, vocab_size, special_tokens);
 
       info!("Saving BPE model...");
-      _bpe_save_train(&bpe, output_spec.get_char().as_ref(), out_dir, file_stem);
+      _bpe_save_train(&bpe, output_spec.get_char().as_ref(), out_dir, &vocab_name);
     }
   }
 }
@@ -292,8 +314,10 @@ fn run_train(args: TrainArgs) {
   } else {
     lines_of(include_str!("../fixtures/default_special_tokens.txt"))
   };
-  let output_spec = args.output_spec.unwrap_or(args.spec);
-  debug!("Spec: {:?}", args.spec.as_str());
+  let output_spec = args.output_spec.unwrap_or(args.char.default_spec());
+
+  let vocab_name = format!("{}[{}]", args.input_file.file_stem().unwrap().display(), args.char.as_str());
+  debug!("Char Level: {:?}", args.char.as_str());
   debug!("Output spec: {:?}", output_spec.as_str());
   debug!("Special tokens: {:?}", special_tokens);
   debug!("Vocabulary size: {}", args.vocab_size);
@@ -306,8 +330,9 @@ fn run_train(args: TrainArgs) {
     args.num_chunks,
     &special_tokens,
     &args.out_dir,
-    args.spec,
+    args.char,
     output_spec,
+    vocab_name,
   );
 }
 
@@ -320,12 +345,10 @@ fn run_encode(args: EncodeArgs) {
 
   let vocab_name = args.vocab_name.unwrap_or(file_stem.to_string());
 
-  let suffix = match args.spec.get_u8().suffix() {
-    Some(s) => format!(".{}", s),
-    None => "".to_string(),
-  };
-  let vocab_file = args.out_dir.join(format!("vocab.{vocab_name}{suffix}.json"));
-  let merges_file = args.out_dir.join(format!("merges.{vocab_name}{suffix}.txt"));
+  let out_spec = args.output_spec.unwrap_or(args.char.default_spec());
+  let char_level = args.char.as_str();
+  let vocab_file = args.out_dir.join(format!("vocab.{vocab_name}[{char_level}].json"));
+  let merges_file = args.out_dir.join(format!("merges.{vocab_name}[{char_level}].txt"));
   let out_file = args.out_dir.join(format!("idxs.{file_stem}.npy"));
 
   let special_tokens = if let Some(special_tokens_path) = args.special_tokens_path {
@@ -344,8 +367,8 @@ fn run_encode(args: EncodeArgs) {
   debug!("Special tokens: {:?}", special_tokens);
 
   // TODO read special tokens from vocab file
-  match args.spec {
-    SpecEnum::Gpt2 => {
+  match args.char {
+    SpecLevel::U8 => {
       info!("Using GPT-2 BPE specification");
       bpe_encode::<u8>(
         args.input_file,
@@ -354,13 +377,13 @@ fn run_encode(args: EncodeArgs) {
         special_tokens,
         args.num_chunks,
         &out_file,
-        args.spec.get_u8().as_ref(),
+        out_spec.get_u8().as_ref(),
         args.version,
         args.vocab_size
       );
       return;
     }
-    SpecEnum::Uni => {
+    SpecLevel::Char => {
       info!("Using Uni BPE specification");
 
       bpe_encode::<Character>(
@@ -370,7 +393,7 @@ fn run_encode(args: EncodeArgs) {
         special_tokens,
         args.num_chunks,
         &out_file,
-        args.spec.get_char_idx().as_ref(),
+        out_spec.get_char_idx().as_ref(),
         args.version,
         args.vocab_size
       );
