@@ -157,7 +157,7 @@ struct EncodeArgs {
   num_chunks: u32,
   #[arg(long = "version", default_value = "2")]
   version: u8,
-  #[arg(long, default_value = "u8")]
+  #[arg(short, long, default_value = "u8")]
   char: SpecLevel,
   #[arg(long = "out-spec")]
   output_spec: Option<SpecOutput>,
@@ -240,13 +240,30 @@ pub fn _bpe_save_train<C, I>(
   bpe.save_merges_txt(spec, merges_file).unwrap();
 }
 
-fn bpe_train<P: AsRef<Path>>(
-  path: P, vocab_size: u32, num_chunks: u32, special_tokens: &Vec<String>, out_dir: &PathBuf, spec: SpecLevel, output_spec: SpecOutput, vocab_name: String,
-) {
-  fs::create_dir_all(out_dir).expect("Failed to create output directory");
+pub struct BpeTrainParams {
+  pub input_path: PathBuf,
+  pub vocab_size: u32,
+  pub num_chunks: u32,
+  pub special_tokens: Vec<String>,
+  pub out_dir: PathBuf,
+  pub char_level: SpecLevel,
+  pub output_spec: SpecOutput,
+  pub vocab_name: String,
+}
 
-  let file_stem = path
-    .as_ref()
+fn bpe_train(BpeTrainParams{
+  input_path,
+  vocab_size,
+  num_chunks,
+  special_tokens,
+  out_dir,
+  char_level: spec,
+  output_spec,
+  vocab_name,
+}: BpeTrainParams) {
+  fs::create_dir_all(&out_dir).expect("Failed to create output directory");
+
+  let file_stem = input_path
     .file_stem()
     .expect("Failed to get file stem")
     .to_str()
@@ -256,7 +273,7 @@ fn bpe_train<P: AsRef<Path>>(
   info!("Pretokenizing input file...");
   let words = _pretokenize(
     out_dir.join(format!("_words.{file_stem}.json")),
-    &path,
+    &input_path,
     num_chunks,
     special_tokens.clone(),
   );
@@ -266,39 +283,59 @@ fn bpe_train<P: AsRef<Path>>(
       info!("Using GPT-2 BPE specification");
 
       info!("Training BPE model...");
-      let bpe = _bpe_train::<u8, Idx>(words, vocab_size, special_tokens);
+      let bpe = _bpe_train::<u8, Idx>(words, vocab_size, &special_tokens);
 
       info!("Saving BPE model...");
-      _bpe_save_train(&bpe, output_spec.get_u8().as_ref(), out_dir, &vocab_name);
+      _bpe_save_train(&bpe, output_spec.get_u8().as_ref(), &out_dir, &vocab_name);
     }
     SpecLevel::Char => {
       info!("Using Uni BPE specification");
 
       info!("Training BPE model...");
-      let bpe = _bpe_train::<Character, CharIdx>(words, vocab_size, special_tokens);
+      let bpe = _bpe_train::<Character, CharIdx>(words, vocab_size, &special_tokens);
 
       info!("Saving BPE model...");
-      _bpe_save_train(&bpe, output_spec.get_char().as_ref(), out_dir, &vocab_name);
+      _bpe_save_train(&bpe, output_spec.get_char().as_ref(), &out_dir, &vocab_name);
     }
   }
 }
 
-fn bpe_encode<C>(input_path: impl AsRef<Path>, vocab_path: impl AsRef<Path>, merges_path: impl AsRef<Path>, special_tokens: Option<Vec<String>>, num_chunks: u32, out_file: &PathBuf, spec: &dyn Spec<C, Idx>, version: u8, vocab_size: Option<usize>)
+pub struct BpeEncoderParams {
+  pub input_path: PathBuf,
+  pub vocab_path: PathBuf,
+  pub merges_path: PathBuf,
+  pub special_tokens: Option<Vec<String>>,
+  pub num_chunks: u32,
+  pub output_path: PathBuf,
+  pub version: u8,
+  pub vocab_size: Option<usize>,
+}
+
+fn bpe_encode<C>(BpeEncoderParams {
+  input_path,
+  vocab_path,
+  merges_path,
+  special_tokens,
+  num_chunks,
+  output_path,
+  version,
+  vocab_size,
+}: BpeEncoderParams, spec: &dyn Spec<C, Idx>)
 where
   BpeEncoder<C>: CanEncode<C, Idx>,
 {
   info!("Initializing BPE encoder...");
   let bpe = BpeEncoder::<C>::new_from_file(spec, vocab_path, merges_path, special_tokens, vocab_size).expect("create bpe encoder");
 
-  info!("Encoding file: {}", input_path.as_ref().display());
+  info!("Encoding file: {}", input_path.display());
   let idxs = match version {
     2 => bpe.encode_file_with_cache_v2(&input_path, num_chunks).expect("encode file v2"),
     _ => bpe.encode_file_with_cache(&input_path, num_chunks).expect("encode file"),
   };
 
   info!("Encoded idxs count: {}", idxs.len());
-  info!("Saving BPE idxs... to {}", out_file.display());
-  bpe.save_idxs_npy(out_file, idxs).expect("save idxs");
+  info!("Saving BPE idxs... to {}", output_path.display());
+  bpe.save_idxs_npy(output_path, idxs).expect("save idxs");
 }
 
 
@@ -317,23 +354,25 @@ fn run_train(args: TrainArgs) {
   let output_spec = args.output_spec.unwrap_or(args.char.default_spec());
 
   let vocab_name = format!("{}[{}]", args.input_file.file_stem().unwrap().display(), args.char.as_str());
-  debug!("Char Level: {:?}", args.char.as_str());
-  debug!("Output spec: {:?}", output_spec.as_str());
-  debug!("Special tokens: {:?}", special_tokens);
-  debug!("Vocabulary size: {}", args.vocab_size);
-  debug!("Number of chunks: {}", args.num_chunks);
-  debug!("Input file: {}", args.input_file.display());
-  debug!("Output directory: {}", args.out_dir.display());
-  bpe_train(
-    args.input_file,
-    args.vocab_size,
-    args.num_chunks,
-    &special_tokens,
-    &args.out_dir,
-    args.char,
+  let params = BpeTrainParams {
+    input_path: args.input_file,
+    vocab_size: args.vocab_size,
+    num_chunks: args.num_chunks,
+    special_tokens,
+    out_dir: args.out_dir,
+    char_level: args.char,
     output_spec,
     vocab_name,
-  );
+  };
+
+  debug!("Char Level: {:?}", params.char_level.as_str());
+  debug!("Output spec: {:?}", params.output_spec.as_str());
+  debug!("Special tokens: {:?}", params.special_tokens);
+  debug!("Vocabulary size: {}", params.vocab_size);
+  debug!("Number of chunks: {}", params.num_chunks);
+  debug!("Input file: {}", params.input_path.display());
+  debug!("Output directory: {}", params.out_dir.display());
+  bpe_train(params);
 }
 
 fn run_encode(args: EncodeArgs) {
@@ -358,28 +397,32 @@ fn run_encode(args: EncodeArgs) {
     None
   };
 
-  debug!("Version: {}", args.version);
-  debug!("Input file: {}", args.input_file.display());
-  debug!("Vocabulary file: {}", vocab_file.display());
-  debug!("Merges file: {}", merges_file.display());
-  debug!("Output file: {}", out_file.display());
-  debug!("Number of chunks: {}", args.num_chunks);
-  debug!("Special tokens: {:?}", special_tokens);
+  let params = BpeEncoderParams {
+    input_path: args.input_file,
+    vocab_path: vocab_file,
+    merges_path: merges_file,
+    special_tokens,
+    num_chunks: args.num_chunks,
+    output_path: out_file,
+    version: args.version,
+    vocab_size: args.vocab_size,
+  };
+
+  debug!("Version: {}", params.version);
+  debug!("Input file: {}", params.input_path.display());
+  debug!("Vocabulary file: {}", params.vocab_path.display());
+  debug!("Merges file: {}", params.merges_path.display());
+  debug!("Output file: {}", params.output_path.display());
+  debug!("Number of chunks: {}", params.num_chunks);
+  debug!("Special tokens: {:?}", params.special_tokens);
 
   // TODO read special tokens from vocab file
   match args.char {
     SpecLevel::U8 => {
       info!("Using GPT-2 BPE specification");
       bpe_encode::<u8>(
-        args.input_file,
-        vocab_file,
-        merges_file,
-        special_tokens,
-        args.num_chunks,
-        &out_file,
+        params,
         out_spec.get_u8().as_ref(),
-        args.version,
-        args.vocab_size
       );
       return;
     }
@@ -387,15 +430,8 @@ fn run_encode(args: EncodeArgs) {
       info!("Using Uni BPE specification");
 
       bpe_encode::<Character>(
-        args.input_file,
-        vocab_file,
-        merges_file,
-        special_tokens,
-        args.num_chunks,
-        &out_file,
+        params,
         out_spec.get_char_idx().as_ref(),
-        args.version,
-        args.vocab_size
       );
     }
   }

@@ -129,10 +129,15 @@ impl WordDisplay<u8> for UniSpec {
   }
 }
 
+fn _should_escape(c: char) -> bool {
+  c < '!' || c == '\x7f' // 33..=126
+}
+
 fn _display_char(ch: &Character) -> String {
   match ch {
     Character::Unicode(' ') => '␣'.to_string(),
     Character::Unicode(c @ ('␣' | '{' | '}')) => format!("{{u{:04x}}}", *c as u32),
+    Character::Unicode(c) if _should_escape(*c) => format!("{{u{:04x}}}", *c as u32),
     Character::Unicode(c) => {
       c.to_string()
     }
