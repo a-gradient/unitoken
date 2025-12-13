@@ -34,6 +34,8 @@ pub enum MyError {
   TrainStep,
   #[error("Specification error: {0}")]
   SpecError(String),
+  #[error("Bpe builder: {0}")]
+  BpeBuilder(String),
 }
 
 pub type MyResult<T> = Result<T, MyError>;

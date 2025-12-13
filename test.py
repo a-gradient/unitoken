@@ -19,3 +19,9 @@ vocabs
 bpe.save("test")
 
 # %%
+from unitoken import BpeEncoder
+encoder = BpeEncoder(name="test", char_level="char")
+print(encoder.encode_string("Hello, world!"))
+print(len(encoder.encode_file("fixtures/tinystories_sample_5M.txt", 100)))
+
+# %%

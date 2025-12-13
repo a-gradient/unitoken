@@ -1,11 +1,11 @@
 #[pyo3::pymodule(gil_used = false)]
 mod _lib {
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use ordermap::OrderMap;
 use pyo3::{prelude::*, pymethods};
 
-use crate::{MyError, bpe::{BpeTrainer, CharIdx, CharSplit, Character, Idx, IdxLike, Word, utils::ToWord}, spec::{gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanStrToWord, Train as _}};
+use crate::{MyError, MyResult, bpe::{BpeEncoder, BpeTrainer, CharIdx, CharSplit, Character, Idx, IdxLike, Word, encoder::BpeBuilder, utils::ToWord}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanEncode, CanStrToWord, Encode, Train as _}};
 
 #[pyclass(subclass)]
 pub struct BpeTrainerBase;
@@ -239,31 +239,124 @@ impl PreTokenizer {
 
   #[pyo3(name = "find_chunk_boundaries")]
   pub fn py_find_chunk_boundaries(
-    &self, path: PathBuf, desired_num_chunks: usize,
+    &self, py: Python, path: PathBuf, desired_num_chunks: usize,
   ) -> PyResult<Vec<(u64, usize)>> {
-    self.find_chunk_boundaries(path, desired_num_chunks)
-      .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    py.detach(||
+      self.find_chunk_boundaries(path, desired_num_chunks)
+    ).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
   }
 
   #[pyo3(name = "get_words_from_segment")]
   pub fn py_get_words_from_segment(
-    &self, path: PathBuf, offset: u64, length: usize,
+    &self, py: Python, path: PathBuf, offset: u64, length: usize,
   ) -> PyResult<BTreeMap<String, i64>> {
-    self.get_words_from_segment(path, offset, length)
-      .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    py.detach(||
+      self.get_words_from_segment(path, offset, length)
+    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
   }
 
   #[pyo3(name = "get_words_from_file")]
   pub fn py_get_words_from_file(
-    &self, path: PathBuf, desired_num_chunks: usize,
+    &self, py: Python, path: PathBuf, desired_num_chunks: usize,
   ) -> PyResult<BTreeMap<String, i64>> {
-    self.get_words_from_file(path, desired_num_chunks)
-      .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    py.detach(||
+      self.get_words_from_file(path, desired_num_chunks)
+    ).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
   }
 }
 
 #[pyclass]
-pub struct BpeEncoderBase;
+pub struct BpeEncoderBase(Arc<dyn Encode<Idx> + Send + Sync>);
+
+fn _arc_to_vec<I: Copy>(i: Arc<[I]>) -> Vec<I> {
+  i.iter().copied().collect()
+}
+
+fn new_bpe<C>(
+  vocabs: Option<BTreeMap<Vec<u8>, Idx>>,
+  merges: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+  vocab_filename: Option<PathBuf>,
+  merges_filename: Option<PathBuf>,
+  spec: &dyn Spec<C, Idx>,
+) -> MyResult<BpeEncoderBase>
+where
+  BpeEncoder<C>: CanEncode<C, Idx>
+{
+  let mut builder = BpeBuilder::new();
+  if let Some(filename) = vocab_filename {
+    builder = builder.load_vocab_file(filename, spec)?;
+  } else if let Some(vocabs) = vocabs {
+    builder = builder.set_vocab(vocabs.into_iter().map(|(k, v)| (v, k)).collect());
+  } else {
+    return Err(MyError::BpeBuilder("Either vocab_filename or vocabs must be provided".to_string()));
+  }
+  if let Some(filename) = merges_filename {
+    builder = builder.load_merges_file(filename, spec)?;
+  } else if let Some(merges) = merges {
+    builder = builder.set_merges_raw(merges);
+  } else {
+    return Err(MyError::BpeBuilder("Either merges_filename or merges must be provided".to_string()));
+  }
+  let bpe = builder.build(spec)?;
+  Ok(BpeEncoderBase(Arc::new(bpe)))
+}
+
+#[pymethods]
+impl BpeEncoderBase {
+  #[new]
+  pub fn new_py(
+    py: Python,
+    spec: &str, char_level: &str,
+    vocabs: Option<BTreeMap<Vec<u8>, Idx>>,
+    merges: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    vocab_filename: Option<PathBuf>,
+    merges_filename: Option<PathBuf>,
+  ) -> PyResult<Self> {
+    py.detach(||
+      match (spec, char_level) {
+        ("gpt2", "u8") => new_bpe::<u8>(vocabs, merges, vocab_filename, merges_filename, &Gpt2Spec),
+        ("uni", "u8") => new_bpe::<u8>(vocabs, merges, vocab_filename, merges_filename, &UniSpec),
+        ("uni", "char") => new_bpe::<Character>(vocabs, merges, vocab_filename, merges_filename, &UniSpec),
+        _ => Err(MyError::SpecError(format!("spec {spec} not compatibale with {char_level}"))),
+      }
+    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  }
+
+  #[pyo3(name = "pre_tokenizer")]
+  pub fn py_pre_tokenizer(&self) -> PreTokenizer {
+    self.0.pre_tokenizer().clone()
+  }
+
+  #[pyo3(name = "encode_word")]
+  pub fn py_encode_word(&self, py: Python, word: &str) -> PyResult<Vec<Idx>> {
+    py.detach(||
+      self.0.encode_word(word).map(_arc_to_vec)
+    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  }
+
+  #[pyo3(name = "encode_words")]
+  pub fn py_encode_words(&self, py: Python, words: Vec<String>) -> PyResult<Vec<Vec<Idx>>> {
+    py.detach(|| {
+      let words = words.iter().map(|i| i.as_str()).collect::<Vec<_>>();
+      let result = self.0.encode_words(&words)?;
+      Ok(result.into_iter().map(_arc_to_vec).collect())
+    }).map_err(|e: MyError| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  }
+
+  #[pyo3(name = "encode_string")]
+  pub fn py_encode_string(&self, py: Python, s: &str) -> PyResult<Vec<Idx>> {
+    py.detach(||
+      self.0.encode_string(s)
+    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  }
+
+  #[pyo3(name = "encode_file")]
+  pub fn py_encode_file(&self, py: Python, path: PathBuf, num_chunks: usize) -> PyResult<Vec<Idx>> {
+    py.detach(||
+      self.0.encode_file(&path, num_chunks)
+    ).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+  }
+}
 
 // #[pymodule(gil_used = false)]
 // #[pyo3(name="_lib")]

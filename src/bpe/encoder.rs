@@ -20,6 +20,7 @@ pub struct BpeBuilder<S = Vec<u8>> {
 }
 
 impl<S> BpeBuilder<S> {
+  #[must_use]
   pub fn new() -> Self {
     Self {
       vocab: None,
@@ -30,6 +31,7 @@ impl<S> BpeBuilder<S> {
     }
   }
 
+  #[must_use]
   pub fn set_vocab(self, vocab: BTreeMap<Idx, S>) -> Self {
     Self {
       vocab: Some(vocab),
@@ -37,6 +39,7 @@ impl<S> BpeBuilder<S> {
     }
   }
 
+  #[must_use]
   pub fn set_merges(self, merges: Vec<((Idx, Idx), Idx)>) -> Self {
     Self {
       merges: Some(merges),
@@ -44,6 +47,7 @@ impl<S> BpeBuilder<S> {
     }
   }
 
+  #[must_use]
   pub fn set_merges_raw(self, merges_raw: Vec<(S, S)>) -> Self {
     Self {
       merges_raw: Some(merges_raw),
@@ -51,6 +55,7 @@ impl<S> BpeBuilder<S> {
     }
   }
 
+  #[must_use]
   pub fn vocab_size(self, size: usize) -> Self {
     Self {
       vocab_size: Some(size),
@@ -58,6 +63,7 @@ impl<S> BpeBuilder<S> {
     }
   }
 
+  #[must_use]
   pub fn set_vocab_size(self, size: Option<usize>) -> Self {
     Self {
       vocab_size: size,
@@ -65,6 +71,7 @@ impl<S> BpeBuilder<S> {
     }
   }
 
+  #[must_use]
   pub fn special_tokens(self, sp: Vec<String>) -> Self {
     Self {
       special_tokens: Some(sp),
@@ -74,6 +81,7 @@ impl<S> BpeBuilder<S> {
 }
 
 impl BpeBuilder {
+  #[must_use]
   pub fn set_vocab_c<C: CharSplit>(self, vocab: BTreeMap<Idx, Word<C>>) -> Self {
     Self {
       vocab: Some(vocab.into_iter().map(|(k, v)| (k, CharSplit::to_vec_u8(&v))).collect()),
@@ -81,6 +89,7 @@ impl BpeBuilder {
     }
   }
 
+  #[must_use]
   pub fn load_vocab_file<C: CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
     println!("Loading vocab file: {}", filename.as_ref().display());
     let file = std::fs::File::open(filename)?;
@@ -88,6 +97,7 @@ impl BpeBuilder {
       .map(|vocab| self.set_vocab_c(vocab))
   }
 
+  #[must_use]
   pub fn load_merges_file<C: Clone + CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
     println!("Loading merges file: {}", filename.as_ref().display());
     let file = std::fs::File::open(filename)?;
@@ -98,6 +108,7 @@ impl BpeBuilder {
     Ok(self.set_merges_raw(merges_raw))
   }
 
+  #[must_use]
   pub fn build<C: Clone + Ord + CharSplit + CanStrToWord + Cachable, SPEC: Spec<C, Idx> + ?Sized>(self, _spec: &SPEC) -> MyResult<BpeEncoder<C>>
   where
     Word<C>: WordDebugExt
