@@ -8,7 +8,7 @@ use std::{
 };
 
 use unitoken::{
-  bpe::{BpeEncoder, BpeTrainer, CharIdx, Character, Idx, encoder::BpeBuilder}, pretokenizer::{PreTokenizer, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanEncode, CanTrain, Train}
+  bpe::{BpeEncoder, BpeTrainer, CharIdx, Character, Idx, encoder::BpeBuilder}, pretokenizer::{PreTokenizer, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanEncode, CanTrain, Encode, Train}
 };
 
 mod _metrics;
@@ -177,7 +177,7 @@ struct PlotArgs {
   input_file: PathBuf,
 }
 
-fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chunks: u32, special_tokens: Vec<String>) -> BTreeMap<String, i64> {
+fn _pretokenize<P1: AsRef<Path>, P2: AsRef<Path>>(output: P1, input: P2, num_chunks: usize, special_tokens: Vec<String>) -> BTreeMap<String, i64> {
   if output.as_ref().exists() {
     info!("pretokenize file already exists, loading from {}", output.as_ref().display());
     let buffered = BufReader::new(fs::File::open(output).expect("open _words file"));
@@ -274,7 +274,7 @@ fn bpe_train(BpeTrainParams{
   let words = _pretokenize(
     out_dir.join(format!("_words.{file_stem}.json")),
     &input_path,
-    num_chunks,
+    num_chunks as _,
     special_tokens.clone(),
   );
 
@@ -335,10 +335,10 @@ where
 
   info!("Encoding file: {}", input_path.display());
   let idxs = match version {
-    2 => bpe.encode_file(&input_path, num_chunks).expect("encode file v2"),
+    2 => bpe.encode_file(input_path.as_ref(), num_chunks as _).expect("encode file v2"),
     _ => {
       #[allow(deprecated)]
-      bpe.encode_file_with_cache(&input_path, num_chunks).expect("encode file")
+      bpe.encode_file_with_cache(&input_path, num_chunks as _).expect("encode file")
     },
   };
 

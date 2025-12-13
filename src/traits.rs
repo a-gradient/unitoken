@@ -1,4 +1,6 @@
-use crate::{MyResult, bpe::{BpeEncoder, BpeTrainer, CharSplit, CharToIdx, Freq, HasChar, Idx, IdxLike, Word, utils::{ToWord, WordDebugExt}}};
+use std::path::Path;
+
+use crate::{MyResult, bpe::{BpeEncoder, BpeTrainer, CharSplit, CharToIdx, Freq, HasChar, Idx, IdxLike, Word, utils::{ToWord, WordDebugExt}}, pretokenizer::PreTokenizer};
 
 pub trait Train {
   fn new(special_tokens: Vec<String>) -> Self;
@@ -16,6 +18,16 @@ pub trait Train {
     }
     Ok(())
   }
+}
+
+pub trait Encode<I> {
+  fn pre_tokenizer(&self) -> &PreTokenizer;
+  fn encode_word(&self, word: &str) -> MyResult<Word<I>>;
+  fn encode_words(&self, words: &[&str]) -> MyResult<Vec<Word<I>>> {
+    words.iter().map(|w| self.encode_word(w)).collect()
+  }
+  fn encode_string(&self, s: &str) -> MyResult<Vec<I>>;
+  fn encode_file(&self, file: &Path, chunks: usize) -> MyResult<Vec<I>>;
 }
 
 pub trait CanToWord<T>: Sized

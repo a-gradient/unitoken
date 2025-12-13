@@ -6,7 +6,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{_read_file_to_buffer, PreTokenizer}, spec::Spec, traits::CanStrToWord,
+  pretokenizer::{_read_file_to_buffer, PreTokenizer}, spec::Spec, traits::{CanEncode, CanStrToWord, Encode},
 };
 
 use super::*;
@@ -335,7 +335,7 @@ where
   }
 
   // #[hotpath::measure]
-  pub fn encode_words<S: AsRef<str>, I: IntoIterator<Item = S>>(&self, input: I) -> MyResult<Vec<Word<Idx>>> {
+  pub fn encode_words_impl<S: AsRef<str>, I: IntoIterator<Item = S>>(&self, input: I) -> MyResult<Vec<Word<Idx>>> {
     let mut results = BTreeMap::new();
     let mut to_encode = Vec::new();
     let mut query = Vec::new();
@@ -389,29 +389,13 @@ where
   }
 
   // #[hotpath::measure]
-  pub fn encode_word(&self, input: &str) -> MyResult<Word<Idx>> {
-    if let Some(result) = self.cache.get(input) {
-      return Ok(result);
-    }
-    let result = self._encode_word(&input.to_word())?;
-    self.cache.insert(input.to_string(), result.clone());
-    Ok(result)
-  }
-
-  // #[hotpath::measure]
-  fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>> {
-    let (tokens_index, special_tokens_index) = self.pre_tokenizer.get_tokens_index_from_segment(input)?;
-    self.encode_tokens_index(&tokens_index, &special_tokens_index)
-  }
-
-  // #[hotpath::measure]
   fn encode_tokens_index(&self, tokens_index: &HashMap<&str, Vec<usize>>, special_tokens_index: &HashMap<&str, Vec<usize>>) -> MyResult<Vec<Idx>> {
     let tokens_num = tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum::<usize>();
     let special_tokens_num = special_tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum::<usize>();
     let total = tokens_num + special_tokens_num;
     let mut result: Vec<&[Idx]> = vec![&[]; total];
 
-    let output = self.encode_words(tokens_index.keys())?;
+    let output = self.encode_words_impl(tokens_index.keys())?;
     for (doc_idxs, w) in tokens_index.values().zip(output.iter()) {
       for doc_idx in doc_idxs.iter() {
         result[*doc_idx] = &w;
@@ -455,17 +439,17 @@ where
 
   #[deprecated(note = "use `encode_file` instead")]
   pub fn encode_file_with_cache<P: AsRef<Path>>(
-    &self, path: P, num_chunks: u32,
+    &self, path: P, num_chunks: usize,
   ) -> MyResult<Vec<Idx>> {
     let words = self.pre_tokenizer.get_words_from_file(&path, num_chunks)?;
     let input = words.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     let cache = self._create_cache_from_words(input)?;
     let bpe_with_cache = self.clone().with_cache(cache);
-    bpe_with_cache.encode_file(path, num_chunks)
+    bpe_with_cache.encode_file(path.as_ref(), num_chunks)
   }
 
-  pub fn encode_file<P: AsRef<Path>>(
-    &self, path: P, num_chunks: u32,
+  pub fn encode_file_impl<P: AsRef<Path>>(
+    &self, path: P, num_chunks: usize,
   ) -> MyResult<Vec<Idx>> {
     let boundaries = self.pre_tokenizer.find_chunk_boundaries(&path, num_chunks)?;
     let path = path.as_ref().to_path_buf();
@@ -484,6 +468,41 @@ where
 
     let result = segments_tokens_index.into_iter().map(|(_, idxs)| idxs).flatten().collect::<Vec<_>>();
     Ok(result)
+  }
+}
+
+impl<C> Encode<Idx> for BpeEncoder<C>
+where
+  BpeEncoder<C>: CanEncode<C, Idx>,
+{
+  fn pre_tokenizer(&self) -> &PreTokenizer {
+    &self.pre_tokenizer
+  }
+
+  #[hotpath::measure]
+  fn encode_word(&self, input: &str) -> MyResult<Word<Idx>> {
+    if let Some(result) = self.cache.get(input) {
+      return Ok(result);
+    }
+    let result = self._encode_word(&input.to_word())?;
+    self.cache.insert(input.to_string(), result.clone());
+    Ok(result)
+  }
+
+  fn encode_words(&self, words: &[&str]) -> MyResult<Vec<Word<Idx>>> {
+    self.encode_words_impl(words)
+  }
+
+  #[hotpath::measure]
+  fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>> {
+    let (tokens_index, special_tokens_index) = self.pre_tokenizer.get_tokens_index_from_segment(input)?;
+    self.encode_tokens_index(&tokens_index, &special_tokens_index)
+  }
+
+  fn encode_file(
+    &self, path: &Path, num_chunks: usize,
+  ) -> MyResult<Vec<Idx>> {
+    self.encode_file_impl(path, num_chunks)
   }
 }
 
@@ -564,8 +583,8 @@ mod tests {
     let input = input.iter().map(|(k, _)| k).collect::<Vec<_>>();
     let mut bpe = _setup_bpe(NAME, &Gpt2Spec);
     bpe.cache = Cache::new(input.len() as u64 * 6 / 5);
-    let result1 = bpe.encode_words(&input).unwrap();
-    let result2 = bpe.encode_words(&input).unwrap();
+    let result1 = bpe.encode_words_impl(&input).unwrap();
+    let result2 = bpe.encode_words_impl(&input).unwrap();
     assert_eq!(result1, result2);
     println!("input size: {}, cache size: {}", input.len(), bpe.cache.weighted_size())
   }
@@ -584,7 +603,7 @@ mod tests {
     const NAME: &str = "tinystories_sample_5M";
     let bpe = _setup_bpe(NAME, &Gpt2Spec);
     let result = bpe.encode_file(
-      format!("fixtures/{NAME}.txt"),
+      format!("fixtures/{NAME}.txt").as_ref(),
       1,
     ).unwrap();
     // assert!(result.len() == 1269588);
@@ -597,7 +616,7 @@ mod tests {
     const NAME: &str = "TinyStories_all_data_zh_1M-sample";
     let bpe = _setup_bpe::<Character>(&format!("{NAME}.uni"), &UniSpec);
     let result = bpe.encode_file(
-      format!("fixtures/{NAME}.txt"),
+      format!("fixtures/{NAME}.txt").as_ref(),
       1,
     ).unwrap();
     assert_eq!(result.len(), 886572);

@@ -42,7 +42,7 @@ impl PreTokenizer {
   }
 
   pub fn find_chunk_boundaries<P: AsRef<Path>>(
-    &self, path: P, desired_num_chunks: u32,
+    &self, path: P, desired_num_chunks: usize,
   ) -> MyResult<Vec<(u64, usize)>> {
     let boundaries = _find_chunk_boundaries(&path, desired_num_chunks, &self.end_of_text)?;
     Ok(boundaries.iter().zip(boundaries.iter().skip(1)).map(|(&a, &b)| (a, (b-a) as usize)).collect())
@@ -116,7 +116,7 @@ impl PreTokenizer {
   }
 
   pub fn get_words_from_file<P: AsRef<Path>>(
-    &self, path: P, num_chunks: u32,
+    &self, path: P, num_chunks: usize,
   ) -> MyResult<BTreeMap<String, Freq>> {
     let boundaries = _find_chunk_boundaries(&path, num_chunks, &self.end_of_text)?;
     let path = path.as_ref().to_path_buf();
@@ -159,7 +159,7 @@ pub fn _pretokenizer_counter<'a>(s: &'a str, pat: &Regex) -> MyResult<BTreeMap<&
 
 #[hotpath::measure]
 pub fn _find_chunk_boundaries<P: AsRef<Path>>(
-  path: P, desired_num_chunks: u32, split_special_token: &str,
+  path: P, desired_num_chunks: usize, split_special_token: &str,
 ) -> MyResult<Vec<u64>> {
   let file_size = fs::metadata(&path)?.len();
   let chunk_size = file_size / desired_num_chunks as u64;

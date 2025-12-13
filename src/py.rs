@@ -239,7 +239,7 @@ impl PreTokenizer {
 
   #[pyo3(name = "find_chunk_boundaries")]
   pub fn py_find_chunk_boundaries(
-    &self, path: PathBuf, desired_num_chunks: u32,
+    &self, path: PathBuf, desired_num_chunks: usize,
   ) -> PyResult<Vec<(u64, usize)>> {
     self.find_chunk_boundaries(path, desired_num_chunks)
       .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
@@ -255,12 +255,15 @@ impl PreTokenizer {
 
   #[pyo3(name = "get_words_from_file")]
   pub fn py_get_words_from_file(
-    &self, path: PathBuf, desired_num_chunks: u32,
+    &self, path: PathBuf, desired_num_chunks: usize,
   ) -> PyResult<BTreeMap<String, i64>> {
     self.get_words_from_file(path, desired_num_chunks)
       .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
   }
 }
+
+#[pyclass]
+pub struct BpeEncoderBase;
 
 // #[pymodule(gil_used = false)]
 // #[pyo3(name="_lib")]
