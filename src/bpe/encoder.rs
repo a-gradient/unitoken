@@ -11,6 +11,122 @@ use crate::{
 
 use super::*;
 
+pub struct BpeBuilder<S = Vec<u8>> {
+  pub vocab: Option<BTreeMap<Idx, S>>,
+  pub merges: Option<Vec<((Idx, Idx), Idx)>>,
+  pub merges_raw: Option<Vec<(S, S)>>,
+  pub special_tokens: Option<Vec<String>>,
+  pub vocab_size: Option<usize>,
+}
+
+impl<S> BpeBuilder<S> {
+  pub fn new() -> Self {
+    Self {
+      vocab: None,
+      merges: None,
+      merges_raw: None,
+      special_tokens: None,
+      vocab_size: None,
+    }
+  }
+
+  pub fn set_vocab(self, vocab: BTreeMap<Idx, S>) -> Self {
+    Self {
+      vocab: Some(vocab),
+      ..self
+    }
+  }
+
+  pub fn set_merges(self, merges: Vec<((Idx, Idx), Idx)>) -> Self {
+    Self {
+      merges: Some(merges),
+      ..self
+    }
+  }
+
+  pub fn set_merges_raw(self, merges_raw: Vec<(S, S)>) -> Self {
+    Self {
+      merges_raw: Some(merges_raw),
+      ..self
+    }
+  }
+
+  pub fn vocab_size(self, size: usize) -> Self {
+    Self {
+      vocab_size: Some(size),
+      ..self
+    }
+  }
+
+  pub fn set_vocab_size(self, size: Option<usize>) -> Self {
+    Self {
+      vocab_size: size,
+      ..self
+    }
+  }
+
+  pub fn special_tokens(self, sp: Vec<String>) -> Self {
+    Self {
+      special_tokens: Some(sp),
+      ..self
+    }
+  }
+}
+
+impl BpeBuilder {
+  pub fn set_vocab_c<C: CharSplit>(self, vocab: BTreeMap<Idx, Word<C>>) -> Self {
+    Self {
+      vocab: Some(vocab.into_iter().map(|(k, v)| (k, CharSplit::to_vec_u8(&v))).collect()),
+      ..self
+    }
+  }
+
+  pub fn load_vocab_file<C: CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
+    println!("Loading vocab file: {}", filename.as_ref().display());
+    let file = std::fs::File::open(filename)?;
+    spec.decode_vocab(&mut std::io::BufReader::new(file))
+      .map(|vocab| self.set_vocab_c(vocab))
+  }
+
+  pub fn load_merges_file<C: Clone + CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
+    println!("Loading merges file: {}", filename.as_ref().display());
+    let file = std::fs::File::open(filename)?;
+    let merges = spec.decode_merges_raw(&mut std::io::BufReader::new(file))?;
+    let merges_raw = merges.into_iter()
+      .map(|m| (CharSplit::to_vec_u8(&m.content.0), CharSplit::to_vec_u8(&m.content.1)))
+      .collect::<Vec<_>>();
+    Ok(self.set_merges_raw(merges_raw))
+  }
+
+  pub fn build<C: Clone + Ord + CharSplit + CanStrToWord + Cachable, SPEC: Spec<C, Idx> + ?Sized>(self, _spec: &SPEC) -> MyResult<BpeEncoder<C>>
+  where
+    Word<C>: WordDebugExt
+  {
+    let vocab = self.vocab.unwrap_or_default().into_iter().map(|(k, v)| {
+      (k, C::from_vec_u8(&v))
+    }).collect::<BTreeMap<_, _>>();
+    let vocab_rev = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
+    let merges = if let Some(merges) = self.merges {
+      merges
+    } else if let Some(merges_raw) = self.merges_raw {
+       merges_raw.into_iter().map(|(a, b)| {
+        let a_w = C::from_vec_u8(&a);
+        let b_w = C::from_vec_u8(&b);
+        let mut merged = a;
+        merged.extend(b);
+        let merged_w = C::from_vec_u8(&merged);
+        let a_idx = *vocab_rev.get(&a_w).ok_or_else(|| MyError::Oov(a_w.debug_display()))?;
+        let b_idx = *vocab_rev.get(&b_w).ok_or_else(|| MyError::Oov(a_w.debug_display()))?;
+        let m_idx = *vocab_rev.get(&merged_w).ok_or_else(|| MyError::Oov(a_w.debug_display()))?;
+        Ok(((a_idx, b_idx), m_idx))
+      }).collect::<MyResult<Vec<((Idx, Idx), Idx)>>>()?
+    } else {
+      Vec::new()
+    };
+    BpeEncoder::new(vocab, merges, self.special_tokens.unwrap_or_default())
+  }
+}
+
 #[derive(Clone)]
 pub struct BpeEncoder<C = u8> {
   pub vocab_bytes: BTreeMap<C, Idx>,
@@ -30,29 +146,29 @@ where
   Word<C>: WordDebugExt,
   C: CanStrToWord,
 {
-  fn _load_vocab<R: std::io::Read>(spec: &dyn Spec<C, Idx>, mut reader: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
-    spec.decode_vocab(&mut reader)
-  }
+  // fn _load_vocab<R: std::io::Read>(spec: &dyn Spec<C, Idx>, mut reader: R) -> MyResult<BTreeMap<Idx, Word<C>>> {
+  //   spec.decode_vocab(&mut reader)
+  // }
 
-  fn _load_merges<R: std::io::Read>(spec: &dyn Spec<C, Idx>, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
-    spec.decode_merges(&mut reader, vocab)
-  }
+  // fn _load_merges<R: std::io::Read>(spec: &dyn Spec<C, Idx>, mut reader: R, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
+  //   spec.decode_merges(&mut reader, vocab)
+  // }
 
-  pub fn new_from_file<P1: AsRef<Path>, P2: AsRef<Path>>(
-    spec: &dyn Spec<C, Idx>, vocab_path: P1, merges_path: P2, special_tokens: Option<Vec<String>>, vocab_size: Option<usize>,
-  ) -> MyResult<Self>
-  where
-    C: Clone
-  {
-    let vocab = Self::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
-    let merges = Self::_load_merges(spec, std::fs::File::open(merges_path)?, &vocab)?;
-    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).take(vocab_size.unwrap_or(usize::MAX)).collect();
-    let special_tokens = match special_tokens {
-      Some(tokens) => tokens,
-      None => Self::get_special_tokens_from_vocab(&vocab)?,
-    };
-    Self::new(vocab, merges, special_tokens)
-  }
+  // pub fn new_from_file<P1: AsRef<Path>, P2: AsRef<Path>>(
+  //   spec: &dyn Spec<C, Idx>, vocab_path: P1, merges_path: P2, special_tokens: Option<Vec<String>>, vocab_size: Option<usize>,
+  // ) -> MyResult<Self>
+  // where
+  //   C: Clone
+  // {
+  //   let vocab = Self::_load_vocab(spec, std::fs::File::open(vocab_path)?)?;
+  //   let merges = Self::_load_merges(spec, std::fs::File::open(merges_path)?, &vocab)?;
+  //   let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).take(vocab_size.unwrap_or(usize::MAX)).collect();
+  //   let special_tokens = match special_tokens {
+  //     Some(tokens) => tokens,
+  //     None => Self::get_special_tokens_from_vocab(&vocab)?,
+  //   };
+  //   Self::new(vocab, merges, special_tokens)
+  // }
 
   pub fn get_special_tokens_from_vocab(vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<String>> {
     let mut special_tokens = Vec::new();
@@ -403,16 +519,25 @@ where
 
 #[cfg(test)]
 mod tests {
-  use crate::{pretokenizer::DEFAULT_EOT, spec::{gpt2::Gpt2Spec, uni::UniSpec}};
+  use crate::{pretokenizer::DEFAULT_EOT, spec::{gpt2::Gpt2Spec, uni::UniSpec}, traits::CanEncode};
 
   use super::*;
 
-  fn _setup_bpe(name: &str) -> BpeEncoder<u8> {
-    let spec = Gpt2Spec;
-    let vocab = BpeEncoder::_load_vocab(&spec, std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
-    let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
-    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    BpeEncoder::new(vocab, merges, vec![DEFAULT_EOT.to_string()]).unwrap()
+  fn _setup_bpe<C>(name: &str, spec: &dyn Spec<C, Idx>) -> BpeEncoder<C>
+  where
+    BpeEncoder<C>: CanEncode<C, Idx>
+  {
+    let bpe = BpeBuilder::new()
+      .load_merges_file(format!("fixtures/merges.{name}.txt"), spec).unwrap()
+      .load_vocab_file(format!("fixtures/vocab.{name}.json"), spec).unwrap()
+      .special_tokens(vec![DEFAULT_EOT.to_string()])
+      .build(spec).unwrap();
+
+    // let vocab = BpeEncoder::_load_vocab(&spec, std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
+    // let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
+    // let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
+    // BpeEncoder::new(vocab, merges, vec![DEFAULT_EOT.to_string()]).unwrap()
+    bpe
   }
 
   #[test]
@@ -421,7 +546,7 @@ mod tests {
     // const NAME: &str = "TinyStoriesV2-GPT4-train";
     let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap()).unwrap();
     let input = input.into_iter().map(|(k, _)| k.to_word()).collect::<Vec<_>>();
-    let bpe = _setup_bpe(NAME);
+    let bpe = _setup_bpe(NAME, &Gpt2Spec);
     let result = bpe._encode_words(&input).unwrap();
     assert_eq!(result.len(), input.len());
 
@@ -437,7 +562,7 @@ mod tests {
     const NAME: &str = "tinystories_sample_5M";
     let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap()).unwrap();
     let input = input.iter().map(|(k, _)| k).collect::<Vec<_>>();
-    let mut bpe = _setup_bpe(NAME);
+    let mut bpe = _setup_bpe(NAME, &Gpt2Spec);
     bpe.cache = Cache::new(input.len() as u64 * 6 / 5);
     let result1 = bpe.encode_words(&input).unwrap();
     let result2 = bpe.encode_words(&input).unwrap();
@@ -448,7 +573,7 @@ mod tests {
   #[test]
   fn test_encode_string() {
     const NAME: &str = "tinystories_sample_5M";
-    let bpe = _setup_bpe(NAME);
+    let bpe = _setup_bpe(NAME, &Gpt2Spec);
     let input = std::fs::read_to_string(format!("fixtures/{NAME}.txt")).unwrap();
     let result = bpe.encode_string(&input).unwrap();
     assert!(result.len() == 1424324);
@@ -457,7 +582,7 @@ mod tests {
   #[test]
   fn test_bpe_encode_file() {
     const NAME: &str = "tinystories_sample_5M";
-    let bpe = _setup_bpe(NAME);
+    let bpe = _setup_bpe(NAME, &Gpt2Spec);
     let result = bpe.encode_file(
       format!("fixtures/{NAME}.txt"),
       1,
@@ -470,11 +595,7 @@ mod tests {
   #[test]
   fn test_bpe_encode_file_uni() {
     const NAME: &str = "TinyStories_all_data_zh_1M-sample";
-    let spec = UniSpec;
-    let vocab = BpeEncoder::_load_vocab(&spec, std::fs::File::open(format!("fixtures/vocab.{NAME}.uni.json")).unwrap()).unwrap();
-    let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{NAME}.uni.txt")).unwrap(), &vocab).unwrap();
-    let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    let bpe = BpeEncoder::<Character>::new(vocab, merges, vec![DEFAULT_EOT.to_string()]).unwrap();
+    let bpe = _setup_bpe::<Character>(&format!("{NAME}.uni"), &UniSpec);
     let result = bpe.encode_file(
       format!("fixtures/{NAME}.txt"),
       1,

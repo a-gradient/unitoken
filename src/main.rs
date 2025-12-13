@@ -8,7 +8,7 @@ use std::{
 };
 
 use unitoken::{
-  bpe::{BpeEncoder, BpeTrainer, CharIdx, Character, Idx}, pretokenizer::{PreTokenizer, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanEncode, CanTrain, Train}
+  bpe::{BpeEncoder, BpeTrainer, CharIdx, Character, Idx, encoder::BpeBuilder}, pretokenizer::{PreTokenizer, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanEncode, CanTrain, Train}
 };
 
 mod _metrics;
@@ -325,7 +325,13 @@ where
   BpeEncoder<C>: CanEncode<C, Idx>,
 {
   info!("Initializing BPE encoder...");
-  let bpe = BpeEncoder::<C>::new_from_file(spec, vocab_path, merges_path, special_tokens, vocab_size).expect("create bpe encoder");
+  let bpe = BpeBuilder::new()
+    .load_merges_file(merges_path, spec).unwrap()
+    .load_vocab_file(vocab_path, spec).unwrap()
+    .special_tokens(special_tokens.unwrap_or_default())
+    .set_vocab_size(vocab_size)
+    .build(spec).unwrap();
+  // (spec, vocab_path, merges_path, special_tokens, vocab_size).expect("create bpe encoder");
 
   info!("Encoding file: {}", input_path.display());
   let idxs = match version {
