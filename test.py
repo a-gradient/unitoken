@@ -16,8 +16,12 @@ for i in range(100):
 
 # %%
 print(bpe.vocab_size)
+
 # %%
-bpe.save_vocab("vocab.json", "uni")
-bpe.save_merges_txt("merges.txt", "uni")
+vocabs = dict(bpe.vocabs.items())
+vocabs
+
+# %%
+bpe.save("test")
 
 # %%

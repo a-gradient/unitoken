@@ -1,13 +1,46 @@
 #[pyo3::pymodule(gil_used = false)]
 mod _lib {
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
-use pyo3::prelude::*;
+use ordermap::OrderMap;
+use pyo3::{prelude::*, pymethods};
 
-use crate::{MyError, bpe::{BpeTrainer, CharIdx, Character, Idx}, spec::{gpt2::Gpt2Spec, uni::UniSpec}, traits::Train as _};
+use crate::{MyError, bpe::{BpeTrainer, CharIdx, CharSplit, Character, Idx, IdxLike, Word, utils::ToWord}, spec::{gpt2::Gpt2Spec, uni::UniSpec}, traits::{CanStrToWord, Train as _}};
 
 #[pyclass(subclass)]
 pub struct BpeTrainerBase;
+
+#[allow(dead_code)]
+/// this is just a reference for impl blocks, not directly used
+pub trait BpeTrainerBaseImpl: Sized {
+  fn new_py(special_tokens: Vec<String>) -> (Self, BpeTrainerBase);
+
+  fn add_words(&mut self, py: Python, words: Vec<(String, i64)>);
+  fn vocab_size(&self) -> usize;
+  fn init_training(&mut self, py: Python);
+  fn step(&mut self, py: Python) -> PyResult<()>;
+  fn get_vocabs(&self) -> Vocabs;
+  fn save_vocab(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()>;
+  fn save_merges_txt(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()>;
+}
+
+// #[pyclass(eq, eq_int)]
+// #[derive(PartialEq)]
+// pub enum SpecEnum {
+//   #[pyo3(name = "gpt2")]
+//   Gpt2,
+//   #[pyo3(name = "uni")]
+//   Uni,
+// }
+
+// #[pyclass(eq, eq_int)]
+// #[derive(PartialEq)]
+// pub enum CharLevel {
+//   #[pyo3(name = "u8")]
+//   U8,
+//   #[pyo3(name = "char")]
+//   Char,
+// }
 
 #[allow(non_camel_case_types)]
 #[pyclass(extends = BpeTrainerBase)]
@@ -43,6 +76,12 @@ impl BpeTrainer_u8_Idx {
 
   pub fn step(&mut self, py: Python) -> PyResult<()> {
     py.detach(|| self.inner.step()).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  }
+
+  pub fn get_vocabs(&self) -> Vocabs {
+    Vocabs {
+      inner: Box::new(VocabsInner::new(&self.inner.vocab)),
+    }
   }
 
   pub fn save_vocab(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()> {
@@ -106,6 +145,12 @@ impl BpeTrainer_Character_CharIdx {
     py.detach(|| self.inner.step()).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
   }
 
+  pub fn get_vocabs(&self) -> Vocabs {
+    Vocabs {
+      inner: Box::new(VocabsInner::new(&self.inner.vocab)),
+    }
+  }
+
   pub fn save_vocab(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()> {
     py.detach(|| {
       let mut file = std::fs::File::create(&path)?;
@@ -131,6 +176,55 @@ impl BpeTrainer_Character_CharIdx {
   }
 }
 
+pub struct VocabsInner<C, I>(OrderMap<Word<C>, I>);
+
+impl<C: std::hash::Hash + Eq, I: IdxLike> VocabsInner<C, I> {
+  pub fn new(vocab: &BTreeMap<I, Word<C>>) -> Self {
+    Self(vocab.iter().map(|(i, c)| (c.clone(), i.clone())).collect())
+  }
+}
+
+trait VocabsImpl {
+  fn len(&self) -> usize;
+  fn get(&self, word: &str) -> Option<i64>;
+  fn items(&self) -> Vec<(Vec<u8>, i64)>;
+}
+
+impl<C: CanStrToWord + CharSplit + std::hash::Hash + Eq, I: IdxLike> VocabsImpl for VocabsInner<C, I> {
+  fn len(&self) -> usize {
+    self.0.len()
+  }
+
+  fn get(&self, word: &str) -> Option<i64> {
+    self.0.get(&word.to_word()).map(|i| i.to_u64() as i64)
+  }
+
+  fn items(&self) -> Vec<(Vec<u8>, i64)> {
+    self.0.iter().map(|(w, i)| (CharSplit::to_vec_u8(w), i.to_u64() as i64)).collect()
+  }
+}
+
+#[pyclass]
+pub struct Vocabs {
+  inner: Box<dyn VocabsImpl + Send + Sync>,
+}
+
+#[pymethods]
+impl Vocabs {
+  #[getter]
+  pub fn len(&self) -> usize {
+    self.inner.len()
+  }
+
+  pub fn get(&self, word: &str) -> Option<i64> {
+    self.inner.get(word)
+  }
+
+  pub fn items(&self) -> Vec<(Vec<u8>, i64)> {
+    self.inner.items()
+  }
+}
+
 // #[pymodule(gil_used = false)]
 // #[pyo3(name="_lib")]
 // fn _tiktoken(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
@@ -144,7 +238,7 @@ impl BpeTrainer_Character_CharIdx {
 }
 
 #[test]
-// #[ignore = "manual"]
+#[ignore = "manual"]
 fn generate_py_stubs() {
   println!("test");
   let module = pyo3_introspection::introspect_cdylib(

@@ -239,6 +239,13 @@ pub trait CharSplit: Sized {
     None
   }
   fn char_split_u8(&self, buffer: &mut Vec<u8>);
+  fn to_vec_u8(w: &Word<Self>) -> Vec<u8> {
+    let mut v = Vec::new();
+    for c in w.iter() {
+      c.char_split_u8(&mut v);
+    }
+    v
+  }
 }
 impl CharSplit for u8 {
   fn char_split_u8(&self, buffer: &mut Vec<u8>) {

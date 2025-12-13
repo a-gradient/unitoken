@@ -9,3 +9,5 @@ _lib.*.so
 __pycache__/
 merges.txt
 vocab.json
+merges.*.txt
+vocab.*.json
