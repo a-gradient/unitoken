@@ -17,12 +17,12 @@ lazy_static! {
 }
 
 /// input a string and a pattern, return a map of tokens and their counts
-pub fn pretokenizer_counter(s: &str, pat: &Regex) -> MyResult<BTreeMap<String, Freq>> {
+pub fn pretokenizer_counter<'a>(s: &'a str, pat: &Regex) -> MyResult<BTreeMap<&'a str, Freq>> {
   let mut result = BTreeMap::new();
   for i in pat.find_iter(s) {
     match i {
       Ok(m) => {
-        let token = m.as_str().to_string();
+        let token = m.as_str();
         *result.entry(token).or_default() += 1;
       }
       Err(e) => {
@@ -172,6 +172,7 @@ pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Regex) -> MyResu
   Ok(parts)
 }
 
+#[hotpath::measure]
 pub fn read_file_to_buffer<P: AsRef<Path>>(path: P, offset: u64, len: usize) -> MyResult<Vec<u8>> {
   let mut file = File::open(&path)?;
   file.seek(std::io::SeekFrom::Start(offset))?;
@@ -201,7 +202,7 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
   metrics::counter!("get_words_from_segment.len").increment(len as _);
 
   trace!(words_len=?words.len(), "result");
-  Ok(words)
+  Ok(words.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
 
 #[hotpath::measure]
@@ -218,22 +219,12 @@ pub fn get_tokens_index_from_segment<'a>(
   for part in parts.into_iter() {
     match part {
       SplitChunk::Special(token) => {
-        let doc_idxs = special_tokens_index.get_mut(token);
-        if let Some(doc_idxs) = doc_idxs {
-          doc_idxs.push(doc_idx);
-        } else {
-          special_tokens_index.insert(token, vec![doc_idx]);
-        }
+        special_tokens_index.entry(token).or_default().push(doc_idx);
         doc_idx += 1;
       }
       SplitChunk::Chunk(part) => {
         for token in pretokenizer_tokens(part, &RE)? {
-          let doc_idxs = tokens_index.get_mut(token);
-          if let Some(doc_idxs) = doc_idxs {
-            doc_idxs.push(doc_idx);
-          } else {
-            tokens_index.insert(token, vec![doc_idx]);
-          }
+          tokens_index.entry(token).or_default().push(doc_idx);
           doc_idx += 1;
         }
       }
@@ -266,7 +257,12 @@ pub fn get_words_from_file<P: AsRef<Path>>(
     .map(|(offset, len)| get_words_from_segment(&path, &re_special_tokens.clone(), offset, len))
     .try_reduce(
       || BTreeMap::new(),
-      |mut a, b| {
+      |a, b| {
+        let (mut a, b) = if a.len() < b.len() {
+          (b, a)
+        } else {
+          (a, b)
+        };
         for (k, v) in b.into_iter() {
           *a.entry(k).or_default() += v;
         }
@@ -297,14 +293,14 @@ mod tests {
     let s = "Hello, world! It's 2024.";
     let tokens = pretokenizer_counter(s, &RE).unwrap();
     let expected_tokens = vec![
-      ("Hello".to_string(), 1),
-      (",".to_string(), 1),
-      (" world".to_string(), 1),
-      ("!".to_string(), 1),
-      (" It".to_string(), 1),
-      ("'s".to_string(), 1),
-      (" 2024".to_string(), 1),
-      (".".to_string(), 1),
+      ("Hello", 1),
+      (",", 1),
+      (" world", 1),
+      ("!", 1),
+      (" It", 1),
+      ("'s", 1),
+      (" 2024", 1),
+      (".", 1),
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();
@@ -313,14 +309,14 @@ mod tests {
     let s = "你好，世界！Now是2024年。";
     let tokens = pretokenizer_counter(s, &RE).unwrap();
     let expected_tokens = vec![
-      ("你好".to_string(), 1),
-      ("，".to_string(), 1),
-      ("世界".to_string(), 1),
-      ("！".to_string(), 1),
-      ("Now是".to_string(), 1),
-      ("2024".to_string(), 1),
-      ("年".to_string(), 1),
-      ("。".to_string(), 1),
+      ("你好", 1),
+      ("，", 1),
+      ("世界", 1),
+      ("！", 1),
+      ("Now是", 1),
+      ("2024", 1),
+      ("年", 1),
+      ("。", 1),
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();
