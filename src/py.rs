@@ -18,7 +18,7 @@ pub trait BpeTrainerBaseImpl: Sized {
   fn add_words(&mut self, py: Python, words: Vec<(String, i64)>);
   fn vocab_size(&self) -> usize;
   fn init_training(&mut self, py: Python);
-  fn step(&mut self, py: Python) -> PyResult<()>;
+  fn step(&mut self, py: Python) -> PyResult<i64>;
   fn get_vocabs(&self) -> Vocabs;
   fn save_vocab(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()>;
   fn save_merges_txt(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()>;
@@ -74,8 +74,9 @@ impl BpeTrainer_u8_Idx {
     py.detach(|| self.inner.init_training())
   }
 
-  pub fn step(&mut self, py: Python) -> PyResult<()> {
-    py.detach(|| self.inner.step()).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  pub fn step(&mut self, py: Python) -> PyResult<i64> {
+    py.detach(|| self.inner.step()).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(self.inner.vocab_size() as i64)
   }
 
   pub fn get_vocabs(&self) -> Vocabs {
@@ -141,8 +142,9 @@ impl BpeTrainer_Character_CharIdx {
     py.detach(|| self.inner.init_training())
   }
 
-  pub fn step(&mut self, py: Python) -> PyResult<()> {
-    py.detach(|| self.inner.step()).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  pub fn step(&mut self, py: Python) -> PyResult<i64> {
+    py.detach(|| self.inner.step()).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(self.inner.vocab_size() as i64)
   }
 
   pub fn get_vocabs(&self) -> Vocabs {
@@ -273,7 +275,7 @@ impl PreTokenizer {
 }
 
 #[test]
-// #[ignore = "manual"]
+#[ignore = "manual"]
 fn generate_py_stubs() {
   println!("test");
   let module = pyo3_introspection::introspect_cdylib(

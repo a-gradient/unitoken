@@ -38,8 +38,17 @@ class BpeTrainer:
   def init_training(self) -> None:
     self._trainer.init_training()
 
-  def step(self) -> None:
-    self._trainer.step()
+  def train(self, num_steps: int) -> None:
+    self.init_training()
+    for _ in range(self.vocab_size, num_steps):
+      if self.step() is None:
+        return
+
+  def step(self) -> int | None:
+    try:
+      return self._trainer.step() or self._trainer.vocab_size()
+    except:
+      return None
 
   def save(self, name: str, *, outdir: str | PathLike = ".", output_format: OutputFormat | None = None) -> None:
     vocab_path = Path(outdir) / f"vocab.{name}[{self.char_level}].json"
