@@ -157,13 +157,13 @@ where
       }
       // if c is char and not in vocab_bytes, try split it into bytes
       let Some(split) = c.char_split() else {
-        return Err(MyError::OovBytes(vec![c.clone()].to_word().debug_display()));
+        return Err(MyError::OovBytes(std::slice::from_ref(c).to_word().debug_display()));
       };
       for b in split {
         if let Some(idx) = self.vocab_bytes.get(&b) {
           idxs.push(*idx);
         } else {
-          return Err(MyError::OovBytes(vec![c.clone()].to_word().debug_display()));
+          return Err(MyError::OovBytes(std::slice::from_ref(c).to_word().debug_display()));
         }
       }
     }

@@ -246,10 +246,14 @@ pub trait CharSplit: Sized {
     }
     v
   }
+  fn from_vec_u8(v: &[u8]) -> Word<Self>;
 }
 impl CharSplit for u8 {
   fn char_split_u8(&self, buffer: &mut Vec<u8>) {
     buffer.push(*self);
+  }
+  fn from_vec_u8(v: &[u8]) -> Word<Self> {
+    v.to_word()
   }
 }
 impl CharSplit for Character {
@@ -270,4 +274,46 @@ impl CharSplit for Character {
       }
     }
   }
+  fn from_vec_u8(v: &[u8]) -> Word<Self> {
+    _try_combine(v).to_word()
+  }
+}
+
+fn _try_combine(word: &[u8]) -> Vec<Character> {
+  let mut chars = Vec::with_capacity(word.len());
+  let mut c = vec![];
+  fn convert_str(v: &[u8]) -> Vec<Character> {
+    match std::str::from_utf8(v) {
+      Ok(s) => s.chars().map(|ch| Character::Unicode(ch)).collect(),
+      Err(_) => v.iter().map(|b| Character::Byte(*b)).collect(),
+    }
+  }
+  for &b in word.iter() {
+    if b.is_ascii() {
+      if !c.is_empty() {
+        chars.extend(convert_str(&c));
+        c.clear();
+      }
+      chars.push(Character::Unicode(b as char));
+    } else if b < 0b_1100_0000 {
+      // 0b_10xx_xxxx means middle byte
+      if !c.is_empty() {
+        c.push(b);
+      } else {
+        chars.push(Character::Byte(b));
+      }
+      continue;
+    } else {
+      // 0b_110x_xxxx or above means start of a multi-byte character
+      if !c.is_empty() {
+        chars.extend(convert_str(&c));
+        c.clear();
+      }
+      c.push(b);
+    }
+  }
+  if !c.is_empty() {
+    chars.extend(convert_str(&c));
+  }
+  chars
 }

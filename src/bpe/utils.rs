@@ -14,8 +14,8 @@ impl<C> ToWord<C> for Vec<C> {
   }
 }
 
-impl ToWord<u8> for &[u8] {
-  fn to_word(self) -> Word<u8> {
+impl<C: Clone> ToWord<C> for &[C] {
+  fn to_word(self) -> Word<C> {
     Arc::from(self.to_owned().into_boxed_slice())
   }
 }

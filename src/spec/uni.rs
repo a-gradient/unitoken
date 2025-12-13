@@ -4,7 +4,7 @@ use fancy_regex::Regex;
 use lazy_static::lazy_static;
 use ordermap::OrderMap;
 
-use crate::{MyError, MyResult, bpe::{Character, HasChar, IdxLike, Merge, Word}, spec::{Spec, WordDisplay}};
+use crate::{MyError, MyResult, bpe::{CharSplit, Character, HasChar, IdxLike, Merge, Word}, spec::{Spec, WordDisplay}};
 
 pub struct UniSpec;
 
@@ -12,6 +12,7 @@ impl<C: Ord, I: IdxLike> Spec<C, I> for UniSpec
 where
   Self: WordDisplay<C>,
   I: HasChar<C>,
+  C: CharSplit,
 {
   fn suffix(&self) -> Option<&str> {
     Some("uni")
@@ -56,15 +57,10 @@ where
     Ok(())
   }
 
-  fn decode_merges(&self, reader: &mut dyn std::io::Read, vocab: &BTreeMap<I, Word<C>>) -> MyResult<Vec<Merge<C, I>>> {
+  fn decode_merges_raw(&self, reader: &mut dyn std::io::Read) -> MyResult<Vec<Merge<C, Word<C>>>> {
     let mut result = Vec::new();
     let mut input = String::new();
     reader.read_to_string(&mut input)?;
-    let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
-    let get_kv = |vocab: &BTreeMap<Word<C>, I>, s: &str| -> MyResult<(I, Word<C>)> {
-      let w = self.word_parse(s)?;
-      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(self.word_display(&w)))?, w))
-    };
     for (i, line) in input.lines().enumerate() {
       if line.trim().is_empty() {
         continue;
@@ -82,14 +78,33 @@ where
       if parts.len() != 2 {
         return Err(MyError::MergeTxt("main parts is not 2", i))
       }
-      let (a_idx, a) = get_kv(&vocab, parts[0])?;
-      let (b_idx, b) = get_kv(&vocab, parts[1])?;
-      let merged = format!("{}{}", parts[0], parts[1]);
-      let (m_idx, _) = get_kv(&vocab, &merged)?;
-      let mut merge = Merge::new((a_idx, b_idx), (a, b)).with_target(m_idx);
+      let a = self.word_parse(parts[0])?;
+      let b = self.word_parse(parts[1])?;
+      let mut merge = Merge::new((a.clone(), b.clone()), (a, b));
       merge.data.freq = freq;
       result.push(merge);
     }
+    Ok(result)
+  }
+
+  fn decode_merges(&self, r: &mut dyn std::io::Read, vocab: &BTreeMap<I, Word<C>>) -> MyResult<Vec<Merge<C, I>>> {
+    let merges_raw = <Self as Spec<C, I>>::decode_merges_raw(self, r)?;
+    let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
+    let get_kv = |vocab: &BTreeMap<Word<C>, I>, w: &Word<C>| -> MyResult<I> {
+      Ok(*vocab.get(w).ok_or_else(|| MyError::Oov(self.word_display(w)))?)
+    };
+    let result = merges_raw.into_iter().map(|merge| {
+      let (a, b) = &merge.content;
+      let a_idx = get_kv(&vocab, &a)?;
+      let b_idx = get_kv(&vocab, &b)?;
+      let mut vec_merged = CharSplit::to_vec_u8(a);
+      vec_merged.extend(CharSplit::to_vec_u8(b));
+      let merged = CharSplit::from_vec_u8(&vec_merged);
+      let m_idx = get_kv(&vocab, &merged)?;
+      let mut merge_new = Merge::new((a_idx, b_idx), merge.content).with_target(m_idx);
+      merge_new.data.freq = merge.data.freq;
+      Ok(merge_new)
+    }).collect::<MyResult<_>>()?;
     Ok(result)
   }
 }
@@ -107,7 +122,7 @@ impl WordDisplay<Character> for UniSpec {
 
 impl WordDisplay<u8> for UniSpec {
   fn word_display(&self, word: &Word<u8>) -> String {
-    _printable(&_try_combine(word))
+    _printable(&CharSplit::from_vec_u8(word.as_ref()))
   }
 
   fn word_parse(&self, s: &str) -> MyResult<Word<u8>> {
@@ -143,40 +158,6 @@ fn _display_char(ch: &Character) -> String {
     }
     Character::Byte(b) => format!("{{x{:02x}}}", *b),
   }
-}
-
-fn _try_combine(word: &Word<u8>) -> Word<Character> {
-  let mut chars = Vec::with_capacity(word.len());
-  let mut c = vec![];
-  fn convert_str(c: Vec<u8>) -> Vec<Character> {
-    match String::from_utf8(c) {
-      Ok(s) => s.chars().map(|ch| Character::Unicode(ch)).collect(),
-      Err(e) => e.as_bytes().iter().map(|b| Character::Byte(*b)).collect(),
-    }
-  }
-  for &b in word.iter() {
-    if b.is_ascii() {
-      if !c.is_empty() {
-        chars.extend(convert_str(c));
-        c = vec![];
-      }
-      chars.push(Character::Unicode(b as char));
-    } else if b < 0b_1100_0000 {
-      if !c.is_empty() {
-        c.push(b);
-      } else {
-        chars.push(Character::Byte(b));
-      }
-      continue;
-    } else {
-      chars.extend(convert_str(c));
-      c = vec![b];
-    }
-  }
-  if !c.is_empty() {
-    chars.extend(convert_str(c));
-  }
-  Arc::from(chars.into_boxed_slice())
 }
 
 fn _printable(word: &Word<Character>) -> String {
@@ -239,7 +220,7 @@ mod tests {
 
   #[test]
   fn test_parse_str() {
-    let s = "a{u0041} {x42}{x43}{u0044}'␣'zz";
+    let s = "a{u0041} {x42}{x43}{u0044}'␣'你{xe5}{xa5}{xbd}zz";
     let chars = _parse_str(s).unwrap();
     let expected = vec![
       Character::Unicode('a'),
@@ -251,6 +232,10 @@ mod tests {
       Character::Unicode('\''),
       Character::Unicode(' '),
       Character::Unicode('\''),
+      Character::Unicode('你'),
+      Character::Byte(229),
+      Character::Byte(165),
+      Character::Byte(189),
       Character::Unicode('z'),
       Character::Unicode('z'),
     ];

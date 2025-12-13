@@ -40,15 +40,10 @@ where
     Ok(())
   }
 
-  fn decode_merges(&self, reader: &mut dyn std::io::Read, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
+  fn decode_merges_raw(&self, reader: &mut dyn std::io::Read) -> MyResult<Vec<Merge<C, Word<C>>>> {
     let mut result = Vec::new();
     let mut input = String::new();
     reader.read_to_string(&mut input)?;
-    let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
-    let get_kv = |vocab: &BTreeMap<Word<C>, Idx>, s: &str| -> MyResult<(Idx, Word<C>)> {
-      let w = self.word_parse(s)?;
-      Ok((*vocab.get(&w).ok_or_else(|| MyError::Oov(self.word_display(&w)))?, w))
-    };
     for (i, line) in input.lines().enumerate() {
       if line.trim().is_empty() {
         continue;
@@ -66,14 +61,31 @@ where
       if parts.len() != 2 {
         return Err(MyError::MergeTxt("main parts is not 2", i))
       }
-      let (a_idx, a) = get_kv(&vocab, parts[0])?;
-      let (b_idx, b) = get_kv(&vocab, parts[1])?;
-      let merged = format!("{}{}", parts[0], parts[1]);
-      let (m_idx, _) = get_kv(&vocab, &merged)?;
-      let mut merge = Merge::new((a_idx, b_idx), (a, b)).with_target(m_idx);
+      let a = self.word_parse(parts[0])?;
+      let b = self.word_parse(parts[1])?;
+      let mut merge = Merge::new((a.clone(), b.clone()), (a, b));
       merge.data.freq = freq;
       result.push(merge);
     }
+    Ok(result)
+  }
+
+  fn decode_merges(&self, r: &mut dyn std::io::Read, vocab: &BTreeMap<Idx, Word<C>>) -> MyResult<Vec<Merge<C, Idx>>> {
+    let merges_raw = self.decode_merges_raw(r)?;
+    let vocab = vocab.iter().map(|(k, v)| (v.clone(), *k)).collect::<BTreeMap<_, _>>();
+    let get_kv = |vocab: &BTreeMap<Word<C>, Idx>, w: &Word<C>| -> MyResult<Idx> {
+      Ok(*vocab.get(w).ok_or_else(|| MyError::Oov(self.word_display(w)))?)
+    };
+    let result = merges_raw.into_iter().map(|merge| {
+      let (a, b) = &merge.content;
+      let a_idx = get_kv(&vocab, &a)?;
+      let b_idx = get_kv(&vocab, &b)?;
+      let merged = format!("{}{}", self.word_display(&merge.content.0), self.word_display(&merge.content.1));
+      let m_idx = get_kv(&vocab, &self.word_parse(&merged)?)?;
+      let mut merge_new = Merge::new((a_idx, b_idx), merge.content).with_target(m_idx);
+      merge_new.data.freq = merge.data.freq;
+      Ok(merge_new)
+    }).collect::<MyResult<_>>()?;
     Ok(result)
   }
 }
