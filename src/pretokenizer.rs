@@ -99,8 +99,8 @@ pub enum SplitChunk<'a> {
   Chunk(&'a str),
 }
 
-impl SplitChunk<'_> {
-  pub fn as_str(&self) -> &str {
+impl<'a> SplitChunk<'a> {
+  pub fn as_str(&self) -> &'a str {
     match self {
       SplitChunk::Special(s) => s,
       SplitChunk::Chunk(s) => s,
@@ -205,41 +205,42 @@ pub fn get_words_from_segment<P: AsRef<Path>>(
 }
 
 #[hotpath::measure]
-pub fn get_tokens_index_from_segment<P: AsRef<Path>>(
-  path: P, re_special_tokens: &Regex, offset: u64, len: usize,
-) -> MyResult<(HashMap<String, Vec<usize>>, HashMap<String, Vec<usize>>)> {
-  let _span = trace_span!("get_tokens_index_from_segment", offset = offset, len = len).entered();
+pub fn get_tokens_index_from_segment<'a>(
+  content: &'a str, re_special_tokens: &Regex,
+) -> MyResult<(HashMap<&'a str, Vec<usize>>, HashMap<&'a str, Vec<usize>>)> {
+  let _span = trace_span!("get_tokens_index_from_segment", len=content.len()).entered();
 
   metrics::counter!("get_tokens_index_from_segment.calls").increment(1);
-  let buffer = read_file_to_buffer(&path, offset, len)?;
-  let content = String::from_utf8_lossy(&buffer);
   let parts = split_special_tokens(&content, &re_special_tokens)?;
-  let mut tokens_index: HashMap<String, Vec<usize>> = HashMap::new();
-  let mut special_tokens_index: HashMap<String, Vec<usize>> = HashMap::new();
+  let mut tokens_index: HashMap<&'a str, Vec<usize>> = HashMap::new();
+  let mut special_tokens_index: HashMap<&'a str, Vec<usize>> = HashMap::new();
   let mut doc_idx = 0;
-  for part in parts.iter() {
-    if part.is_special() {
-      let doc_idxs = special_tokens_index.get_mut(part.as_str());
-      if let Some(doc_idxs) = doc_idxs {
-        doc_idxs.push(doc_idx);
-      } else {
-        special_tokens_index.insert(part.as_str().to_string(), vec![doc_idx]);
-      }
-      doc_idx += 1;
-    } else {
-      for token in pretokenizer_tokens(part.as_str(), &RE)? {
-        let doc_idxs = tokens_index.get_mut(token);
+  for part in parts.into_iter() {
+    match part {
+      SplitChunk::Special(token) => {
+        let doc_idxs = special_tokens_index.get_mut(token);
         if let Some(doc_idxs) = doc_idxs {
           doc_idxs.push(doc_idx);
         } else {
-          tokens_index.insert(token.to_string(), vec![doc_idx]);
+          special_tokens_index.insert(token, vec![doc_idx]);
         }
         doc_idx += 1;
+      }
+      SplitChunk::Chunk(part) => {
+        for token in pretokenizer_tokens(part, &RE)? {
+          let doc_idxs = tokens_index.get_mut(token);
+          if let Some(doc_idxs) = doc_idxs {
+            doc_idxs.push(doc_idx);
+          } else {
+            tokens_index.insert(token, vec![doc_idx]);
+          }
+          doc_idx += 1;
+        }
       }
     }
   }
 
-  metrics::counter!("get_tokens_index_from_segment.len").increment(len as _);
+  metrics::counter!("get_tokens_index_from_segment.len").increment(content.len() as _);
   metrics::histogram!("get_tokens_index_from_segment.special_tokens_sum").record(special_tokens_index.values().map(Vec::len).sum::<usize>() as f64);
   metrics::histogram!("get_tokens_index_from_segment.tokens_count").record(tokens_index.len() as f64);
   metrics::histogram!("get_tokens_index_from_segment.doc_idx").record(doc_idx as f64);
@@ -390,10 +391,10 @@ mod tests {
   fn test_get_tokens_index_from_segment() {
     const NAME: &str = "tinystories_sample_5M";
     let path = format!("fixtures/{NAME}.txt");
+    let text = std::fs::read_to_string(&path).unwrap();
     let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(
-      &path,
+      &text,
       &create_special_token_regex(&["<|endoftext|>".to_string()]),
-      0, 5242880,
     ).unwrap();
     let idxs = tokens_index.get(" the").unwrap();
     println!("the idxs length: {:?}", idxs.len());

@@ -7,7 +7,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{RE, create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, pretokenizer_tokens, read_file_to_buffer, split_special_tokens}, spec::Spec, traits::CanStrToWord,
+  pretokenizer::{create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, read_file_to_buffer}, spec::Spec, traits::CanStrToWord,
 };
 
 use super::*;
@@ -284,35 +284,19 @@ where
 
   // #[hotpath::measure]
   fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>> {
-    let parts = split_special_tokens(&input, &self.re_special_tokens)?;
-    let mut res = Vec::new();
-    for part in parts.iter() {
-      if part.is_special() {
-        let idx = *self.special_tokens.get(part.as_str()).ok_or_else(|| MyError::Oov(part.as_str().to_string()))?;
-        res.push(idx);
-      } else {
-        pretokenizer_tokens(part.as_str(), &RE)?
-          .iter()
-          .try_for_each(|token| -> MyResult<()> {
-            let idxs = self.encode_word(&token)?;
-            res.extend_from_slice(&idxs);
-            Ok(())
-          })?;
-      }
-    }
-    return Ok(res);
+    let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(input, &self.re_special_tokens)?;
+    self.encode_tokens_index(&tokens_index, &special_tokens_index)
   }
 
   // #[hotpath::measure]
-  fn encode_tokens_index(&self, tokens_index: &HashMap<String, Vec<usize>>, special_tokens_index: &HashMap<String, Vec<usize>>) -> MyResult<Vec<Idx>> {
+  fn encode_tokens_index(&self, tokens_index: &HashMap<&str, Vec<usize>>, special_tokens_index: &HashMap<&str, Vec<usize>>) -> MyResult<Vec<Idx>> {
     let tokens_num = tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum::<usize>();
     let special_tokens_num = special_tokens_index.iter().map(|(_, doc_idxs)| doc_idxs.len()).sum::<usize>();
     let total = tokens_num + special_tokens_num;
     let mut result: Vec<&[Idx]> = vec![&[]; total];
 
-    let input = tokens_index.iter().map(|(token, _)| token).collect::<Vec<_>>();
-    let output = self.encode_words(input)?;
-    for ((_token, doc_idxs), w) in tokens_index.iter().zip(output.iter()) {
+    let output = self.encode_words(tokens_index.keys())?;
+    for (doc_idxs, w) in tokens_index.values().zip(output.iter()) {
       for doc_idx in doc_idxs.iter() {
         result[*doc_idx] = &w;
       }
@@ -320,13 +304,13 @@ where
 
     let special_output = special_tokens_index.iter()
       .map(|(token, _)| {
-        let idx = self.special_tokens.get(token).ok_or_else(|| MyError::Oov(token.to_string()))?;
-        Ok(vec![*idx].to_word())
+        let idx = self.special_tokens.get(*token).ok_or_else(|| MyError::Oov(token.to_string()))?;
+        Ok([*idx])
       })
       .collect::<MyResult<Vec<_>>>()?;
     for ((_token, doc_idxs), w) in special_tokens_index.iter().zip(special_output.iter()) {
       for doc_idx in doc_idxs.iter() {
-        result[*doc_idx] = &w;
+        result[*doc_idx] = w.as_slice();
       }
     }
 
@@ -391,7 +375,9 @@ where
     debug!("Start encoding file in {num_chunks} chunks...");
     let mut segments_tokens_index = params.into_par_iter()
       .map(|(index, offset, len)| {
-        let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(&path, &self.re_special_tokens, offset, len)?;
+        let buffer = read_file_to_buffer(&path, offset, len)?;
+        let content = String::from_utf8_lossy(&buffer);
+        let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(&content, &self.re_special_tokens)?;
         self.encode_tokens_index(&tokens_index, &special_tokens_index).map(|idxs| (index, idxs))
       }).collect::<MyResult<Vec<_>>>()?;
 
@@ -502,6 +488,15 @@ mod tests {
     let result2 = bpe.encode_words(&input).unwrap();
     assert_eq!(result1, result2);
     println!("input size: {}, cache size: {}", input.len(), bpe.cache.weighted_size())
+  }
+
+  #[test]
+  fn test_encode_string() {
+    const NAME: &str = "tinystories_sample_5M";
+    let bpe = _setup_bpe(NAME);
+    let input = std::fs::read_to_string(format!("fixtures/{NAME}.txt")).unwrap();
+    let result = bpe.encode_string(&input).unwrap();
+    assert!(result.len() == 1424324);
   }
 
   #[test]
