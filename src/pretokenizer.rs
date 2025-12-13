@@ -18,6 +18,7 @@ lazy_static! {
 pub const DEFAULT_EOT: &'static str = "<|endoftext|>";
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 pub struct PreTokenizer {
   pub re_pat: Regex,
   pub re_special_tokens: Regex,

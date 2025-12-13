@@ -225,8 +225,40 @@ impl Vocabs {
   }
 }
 
-#[pyclass]
-pub struct PreTokenizer;
+#[pymodule_export]
+pub use crate::pretokenizer::PreTokenizer;
+
+#[pymethods]
+impl PreTokenizer {
+  #[new]
+  pub fn new_py(special_tokens: Vec<String>, eot_token: Option<String>) -> Self {
+    Self::new(&special_tokens, eot_token.as_deref())
+  }
+
+  #[pyo3(name = "find_chunk_boundaries")]
+  pub fn py_find_chunk_boundaries(
+    &self, path: PathBuf, desired_num_chunks: u32,
+  ) -> PyResult<Vec<(u64, usize)>> {
+    self.find_chunk_boundaries(path, desired_num_chunks)
+      .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+  }
+
+  #[pyo3(name = "get_words_from_segment")]
+  pub fn py_get_words_from_segment(
+    &self, path: PathBuf, offset: u64, length: usize,
+  ) -> PyResult<BTreeMap<String, i64>> {
+    self.get_words_from_segment(path, offset, length)
+      .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  }
+
+  #[pyo3(name = "get_words_from_file")]
+  pub fn py_get_words_from_file(
+    &self, path: PathBuf, desired_num_chunks: u32,
+  ) -> PyResult<BTreeMap<String, i64>> {
+    self.get_words_from_file(path, desired_num_chunks)
+      .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+  }
+}
 
 // #[pymodule(gil_used = false)]
 // #[pyo3(name="_lib")]
@@ -241,7 +273,7 @@ pub struct PreTokenizer;
 }
 
 #[test]
-#[ignore = "manual"]
+// #[ignore = "manual"]
 fn generate_py_stubs() {
   println!("test");
   let module = pyo3_introspection::introspect_cdylib(

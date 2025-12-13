@@ -1,13 +1,17 @@
 # %%
-from unitoken import BpeTrainer
+from unitoken import BpeTrainer, PreTokenizer
+pre = PreTokenizer(["<|endoftext|>"], None)
+words = pre.get_words_from_file("fixtures/tinystories_sample_5M.txt", 100)
+
+# %%
 
 bpe = BpeTrainer(["<|endoftext|>"], ch="char")
 print(bpe.vocab_size)
-bpe.add_words([("我", 1), ("是", 2), ("一个", 1), ("测试", 1), ("文本", 1)])
+bpe.add_words(words)
 bpe.init_training()
 
 # %%
-for i in range(100):
+for i in range(bpe.vocab_size, 1000):
   try:
     bpe.step()
   except Exception as e:

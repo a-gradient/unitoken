@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Literal
@@ -30,7 +30,9 @@ class BpeTrainer:
   def vocabs(self):
     return self._trainer.get_vocabs()
 
-  def add_words(self, words: Sequence[tuple[str, int]]) -> None:
+  def add_words(self, words: Mapping[str, int] | Sequence[tuple[str, int]]) -> None:
+    if isinstance(words, Mapping):
+      words = list(words.items())
     self._trainer.add_words(words)
 
   def init_training(self) -> None:
