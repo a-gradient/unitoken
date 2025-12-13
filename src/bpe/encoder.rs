@@ -1,13 +1,12 @@
 use std::{collections::{BTreeMap, HashMap}, io::BufWriter, path::Path, usize};
 
-use fancy_regex::Regex;
 use moka::sync::Cache;
 use npyz::WriterBuilder;
-use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
   MyError, MyResult,
-  pretokenizer::{create_special_token_regex, find_chunk_boundaries, get_tokens_index_from_segment, get_words_from_file, read_file_to_buffer}, spec::Spec, traits::CanStrToWord,
+  pretokenizer::{_read_file_to_buffer, PreTokenizer}, spec::Spec, traits::CanStrToWord,
 };
 
 use super::*;
@@ -18,7 +17,7 @@ pub struct BpeEncoder<C = u8> {
   pub vocab_rev: BTreeMap<Word<C>, Idx>,
   pub vocab: BTreeMap<Idx, Word<C>>,
   pub special_tokens: BTreeMap<String, Idx>,
-  pub re_special_tokens: Regex,
+  pub pre_tokenizer: PreTokenizer,
   pub merges: Vec<((Idx, Idx), Idx)>,
   /// with freq represents rank, or `merge.data.freq=-i` for i-th merge.
   /// with [`occurs_in={0}`](MergeData::occurs_in), in order to handle first word in [`Self::_encode_word`].
@@ -121,7 +120,8 @@ where
       merge.add(0, -(i as Freq));
       Ok((tp, merge))
     }).collect::<MyResult<_>>()?;
-    let re_special_tokens = create_special_token_regex(&special_tokens);
+    let end_of_text = special_tokens.first().cloned();
+    let pre_tokenizer = PreTokenizer::new(&special_tokens, end_of_text.as_deref());
     let special_tokens = special_tokens.into_iter().map(|s| {
       let w = s.to_word();
       let idx = *vocab_rev.get(&w).ok_or_else(|| MyError::Oov(w.debug_display()))?;
@@ -135,7 +135,7 @@ where
       merges,
       pre_merge_map,
       special_tokens,
-      re_special_tokens,
+      pre_tokenizer,
       cache: Cache::new(max_cap),
     })
   }
@@ -284,7 +284,7 @@ where
 
   // #[hotpath::measure]
   fn encode_string(&self, input: &str) -> MyResult<Vec<Idx>> {
-    let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(input, &self.re_special_tokens)?;
+    let (tokens_index, special_tokens_index) = self.pre_tokenizer.get_tokens_index_from_segment(input)?;
     self.encode_tokens_index(&tokens_index, &special_tokens_index)
   }
 
@@ -328,10 +328,6 @@ where
     Ok(cache)
   }
 
-  pub fn _split_special_token(&self) -> Option<&str> {
-    self.special_tokens.iter().min_by_key(|(_, v)| *v).map(|(k, _)| k.as_str())
-  }
-
   pub fn with_cache(mut self, cache: OrderMap<String, Arc<[Idx]>>) -> Self {
     let max_cap = cache.len() as u64 * 3 / 2;
     self.cache = Cache::new(max_cap);
@@ -345,8 +341,7 @@ where
   pub fn encode_file_with_cache<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
   ) -> MyResult<Vec<Idx>> {
-    let split_special_token = self._split_special_token();
-    let words = get_words_from_file(&path, num_chunks, self.re_special_tokens.clone(), split_special_token)?;
+    let words = self.pre_tokenizer.get_words_from_file(&path, num_chunks)?;
     let input = words.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     let cache = self._create_cache_from_words(input)?;
     let bpe_with_cache = self.clone().with_cache(cache);
@@ -356,20 +351,14 @@ where
   pub fn encode_file<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
   ) -> MyResult<Vec<Idx>> {
-    let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
-    let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
+    let boundaries = self.pre_tokenizer.find_chunk_boundaries(&path, num_chunks)?;
     let path = path.as_ref().to_path_buf();
-    let params = boundaries
-      .iter()
-      .zip(boundaries.iter().skip(1))
-      .enumerate()
-      .map(|(index , (start, end))| (index, *start, (*end - *start) as usize))
-      .collect::<Vec<_>>();
 
     debug!("Start encoding file in {num_chunks} chunks...");
-    let mut segments_tokens_index = params.into_par_iter()
-      .map(|(index, offset, len)| {
-        let buffer = read_file_to_buffer(&path, offset, len)?;
+    let mut segments_tokens_index = boundaries.into_par_iter()
+      .enumerate()
+      .map(|(index, (offset, len))| {
+        let buffer = _read_file_to_buffer(&path, offset, len)?;
         let content = String::from_utf8_lossy(&buffer);
         self.encode_string(&content).map(|v| (index, v))
       }).collect::<MyResult<Vec<_>>>()?;
@@ -414,7 +403,7 @@ where
 
 #[cfg(test)]
 mod tests {
-  use crate::spec::{gpt2::Gpt2Spec, uni::UniSpec};
+  use crate::{pretokenizer::DEFAULT_EOT, spec::{gpt2::Gpt2Spec, uni::UniSpec}};
 
   use super::*;
 
@@ -423,7 +412,7 @@ mod tests {
     let vocab = BpeEncoder::_load_vocab(&spec, std::fs::File::open(format!("fixtures/vocab.{name}.json")).unwrap()).unwrap();
     let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{name}.txt")).unwrap(), &vocab).unwrap();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    BpeEncoder::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap()
+    BpeEncoder::new(vocab, merges, vec![DEFAULT_EOT.to_string()]).unwrap()
   }
 
   #[test]
@@ -485,7 +474,7 @@ mod tests {
     let vocab = BpeEncoder::_load_vocab(&spec, std::fs::File::open(format!("fixtures/vocab.{NAME}.uni.json")).unwrap()).unwrap();
     let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{NAME}.uni.txt")).unwrap(), &vocab).unwrap();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
-    let bpe = BpeEncoder::<Character>::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap();
+    let bpe = BpeEncoder::<Character>::new(vocab, merges, vec![DEFAULT_EOT.to_string()]).unwrap();
     let result = bpe.encode_file(
       format!("fixtures/{NAME}.txt"),
       1,

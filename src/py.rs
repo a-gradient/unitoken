@@ -225,6 +225,9 @@ impl Vocabs {
   }
 }
 
+#[pyclass]
+pub struct PreTokenizer;
+
 // #[pymodule(gil_used = false)]
 // #[pyo3(name="_lib")]
 // fn _tiktoken(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {

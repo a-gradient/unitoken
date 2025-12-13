@@ -13,43 +13,151 @@ use crate::{MyError, MyResult, bpe::Freq};
 
 lazy_static! {
   /// PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-  pub static ref RE: Regex = Regex::new(r"'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+").unwrap();
+  pub static ref DEFAULT_PAT: Regex = Regex::new(r"'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+").unwrap();
+}
+pub const DEFAULT_EOT: &'static str = "<|endoftext|>";
+
+#[derive(Clone, Debug)]
+pub struct PreTokenizer {
+  pub re_pat: Regex,
+  pub re_special_tokens: Regex,
+  pub end_of_text: String,
+  pub metrics: bool
+}
+
+impl PreTokenizer {
+  pub fn new(special_tokens: &[String], end_of_text: Option<&str>) -> Self {
+    let re_special_tokens = create_special_token_regex(special_tokens);
+    Self {
+      re_pat: DEFAULT_PAT.clone(),
+      re_special_tokens,
+      end_of_text: end_of_text.unwrap_or(DEFAULT_EOT).to_string(),
+      metrics: true,
+    }
+  }
+
+  pub fn count_tokens<'a>(&self, text: &'a str) -> MyResult<BTreeMap<&'a str, Freq>> {
+    _pretokenizer_counter(text, &self.re_pat)
+  }
+
+  pub fn find_chunk_boundaries<P: AsRef<Path>>(
+    &self, path: P, desired_num_chunks: u32,
+  ) -> MyResult<Vec<(u64, usize)>> {
+    let boundaries = _find_chunk_boundaries(&path, desired_num_chunks, &self.end_of_text)?;
+    Ok(boundaries.iter().zip(boundaries.iter().skip(1)).map(|(&a, &b)| (a, (b-a) as usize)).collect())
+  }
+
+  #[hotpath::measure]
+  pub fn get_tokens_index_from_segment<'a>(
+    &self, content: &'a str,
+  ) -> MyResult<(HashMap<&'a str, Vec<usize>>, HashMap<&'a str, Vec<usize>>)> {
+    let _span = trace_span!("get_tokens_index_from_segment", len=content.len()).entered();
+
+    if self.metrics {
+      metrics::counter!("get_tokens_index_from_segment.calls").increment(1);
+    }
+    let parts = split_special_tokens(&content, &self.re_special_tokens)?;
+    let mut tokens_index: HashMap<&'a str, Vec<usize>> = HashMap::new();
+    let mut special_tokens_index: HashMap<&'a str, Vec<usize>> = HashMap::new();
+    let mut doc_idx = 0;
+    for part in parts.into_iter() {
+      match part {
+        SplitChunk::Special(token) => {
+          special_tokens_index.entry(token).or_default().push(doc_idx);
+          doc_idx += 1;
+        }
+        SplitChunk::Chunk(part) => {
+          for token in self.re_pat.find_iter(part) {
+            tokens_index.entry(token?.as_str()).or_default().push(doc_idx);
+            doc_idx += 1;
+          }
+        }
+      }
+    }
+
+    if self.metrics {
+      metrics::counter!("get_tokens_index_from_segment.len").increment(content.len() as _);
+      metrics::histogram!("get_tokens_index_from_segment.special_tokens_sum").record(special_tokens_index.values().map(Vec::len).sum::<usize>() as f64);
+      metrics::histogram!("get_tokens_index_from_segment.tokens_count").record(tokens_index.len() as f64);
+      metrics::histogram!("get_tokens_index_from_segment.doc_idx").record(doc_idx as f64);
+    }
+
+    trace!(tokens_index_len=?tokens_index.len(), "result");
+    Ok((tokens_index, special_tokens_index))
+  }
+
+  #[hotpath::measure]
+  pub fn get_words_from_segment<P: AsRef<Path>>(
+    &self, path: P, offset: u64, len: usize,
+  ) -> MyResult<BTreeMap<String, Freq>> {
+    let _span = trace_span!("get_words_from_segment", offset = offset, len = len).entered();
+
+    if self.metrics {
+      metrics::counter!("get_words_from_segment.calls").increment(1);
+    }
+    let buffer = _read_file_to_buffer(&path, offset, len)?;
+
+    let content = String::from_utf8_lossy(&buffer);
+    let parts = split_special_tokens(&content, &self.re_special_tokens)?;
+    let mut words = BTreeMap::new();
+    for part in parts.iter().filter(|i| !i.is_special()) {
+      for (token, count) in _pretokenizer_counter(part.as_str(), &DEFAULT_PAT)? {
+        *words.entry(token).or_default() += count;
+      }
+    }
+    if self.metrics {
+      metrics::histogram!("get_words_from_segment.words_count").record(words.len() as f64);
+      metrics::counter!("get_words_from_segment.len").increment(len as _);
+    }
+
+    trace!(words_len=?words.len(), "result");
+    Ok(words.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+  }
+
+  pub fn get_words_from_file<P: AsRef<Path>>(
+    &self, path: P, num_chunks: u32,
+  ) -> MyResult<BTreeMap<String, Freq>> {
+    let boundaries = _find_chunk_boundaries(&path, num_chunks, &self.end_of_text)?;
+    let path = path.as_ref().to_path_buf();
+    let params = boundaries
+      .iter()
+      .zip(boundaries.iter().skip(1))
+      .map(|(start, end)| (*start, (*end - *start) as usize))
+      .collect::<Vec<_>>();
+
+    let words = params
+      .into_par_iter()
+      .map(|(offset, len)| self.get_words_from_segment(&path, offset, len))
+      .try_reduce(
+        || BTreeMap::new(),
+        |a, b| {
+          let (mut a, b) = if a.len() < b.len() {
+            (b, a)
+          } else {
+            (a, b)
+          };
+          for (k, v) in b.into_iter() {
+            *a.entry(k).or_default() += v;
+          }
+          Ok(a)
+        },
+      )?;
+    Ok(words)
+  }
 }
 
 /// input a string and a pattern, return a map of tokens and their counts
-pub fn pretokenizer_counter<'a>(s: &'a str, pat: &Regex) -> MyResult<BTreeMap<&'a str, Freq>> {
+pub fn _pretokenizer_counter<'a>(s: &'a str, pat: &Regex) -> MyResult<BTreeMap<&'a str, Freq>> {
   let mut result = BTreeMap::new();
   for i in pat.find_iter(s) {
-    match i {
-      Ok(m) => {
-        let token = m.as_str();
-        *result.entry(token).or_default() += 1;
-      }
-      Err(e) => {
-        return Err(MyError::Regex(e));
-      }
-    }
-  }
-  Ok(result)
-}
-
-pub fn pretokenizer_tokens<'a>(s: &'a str, pat: &Regex) -> MyResult<Vec<&'a str>> {
-  let mut result = Vec::new();
-  for i in pat.find_iter(s) {
-    match i {
-      Ok(m) => {
-        result.push(m.as_str());
-      }
-      Err(e) => {
-        return Err(MyError::Regex(e));
-      }
-    }
+    let token = i?.as_str();
+    *result.entry(token).or_default() += 1;
   }
   Ok(result)
 }
 
 #[hotpath::measure]
-pub fn find_chunk_boundaries<P: AsRef<Path>>(
+pub fn _find_chunk_boundaries<P: AsRef<Path>>(
   path: P, desired_num_chunks: u32, split_special_token: &str,
 ) -> MyResult<Vec<u64>> {
   let file_size = fs::metadata(&path)?.len();
@@ -173,105 +281,13 @@ pub fn split_special_tokens<'a>(text: &'a str, special_tokens: &Regex) -> MyResu
 }
 
 #[hotpath::measure]
-pub fn read_file_to_buffer<P: AsRef<Path>>(path: P, offset: u64, len: usize) -> MyResult<Vec<u8>> {
+pub fn _read_file_to_buffer<P: AsRef<Path>>(path: P, offset: u64, len: usize) -> MyResult<Vec<u8>> {
   let mut file = File::open(&path)?;
   file.seek(std::io::SeekFrom::Start(offset))?;
   let mut buffer = vec![0; len];
   file.read_exact(&mut buffer)?;
   Ok(buffer)
 }
-
-#[hotpath::measure]
-pub fn get_words_from_segment<P: AsRef<Path>>(
-  path: P, re_special_tokens: &Regex, offset: u64, len: usize,
-) -> MyResult<BTreeMap<String, Freq>> {
-  let _span = trace_span!("get_words_from_segment", offset = offset, len = len).entered();
-
-  metrics::counter!("get_words_from_segment.calls").increment(1);
-  let buffer = read_file_to_buffer(&path, offset, len)?;
-
-  let content = String::from_utf8_lossy(&buffer);
-  let parts = split_special_tokens(&content, &re_special_tokens)?;
-  let mut words = BTreeMap::new();
-  for part in parts.iter().filter(|i| !i.is_special()) {
-    for (token, count) in pretokenizer_counter(part.as_str(), &RE)? {
-      *words.entry(token).or_default() += count;
-    }
-  }
-  metrics::histogram!("get_words_from_segment.words_count").record(words.len() as f64);
-  metrics::counter!("get_words_from_segment.len").increment(len as _);
-
-  trace!(words_len=?words.len(), "result");
-  Ok(words.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
-}
-
-#[hotpath::measure]
-pub fn get_tokens_index_from_segment<'a>(
-  content: &'a str, re_special_tokens: &Regex,
-) -> MyResult<(HashMap<&'a str, Vec<usize>>, HashMap<&'a str, Vec<usize>>)> {
-  let _span = trace_span!("get_tokens_index_from_segment", len=content.len()).entered();
-
-  metrics::counter!("get_tokens_index_from_segment.calls").increment(1);
-  let parts = split_special_tokens(&content, &re_special_tokens)?;
-  let mut tokens_index: HashMap<&'a str, Vec<usize>> = HashMap::new();
-  let mut special_tokens_index: HashMap<&'a str, Vec<usize>> = HashMap::new();
-  let mut doc_idx = 0;
-  for part in parts.into_iter() {
-    match part {
-      SplitChunk::Special(token) => {
-        special_tokens_index.entry(token).or_default().push(doc_idx);
-        doc_idx += 1;
-      }
-      SplitChunk::Chunk(part) => {
-        for token in pretokenizer_tokens(part, &RE)? {
-          tokens_index.entry(token).or_default().push(doc_idx);
-          doc_idx += 1;
-        }
-      }
-    }
-  }
-
-  metrics::counter!("get_tokens_index_from_segment.len").increment(content.len() as _);
-  metrics::histogram!("get_tokens_index_from_segment.special_tokens_sum").record(special_tokens_index.values().map(Vec::len).sum::<usize>() as f64);
-  metrics::histogram!("get_tokens_index_from_segment.tokens_count").record(tokens_index.len() as f64);
-  metrics::histogram!("get_tokens_index_from_segment.doc_idx").record(doc_idx as f64);
-
-  trace!(tokens_index_len=?tokens_index.len(), "result");
-  Ok((tokens_index, special_tokens_index))
-}
-
-pub fn get_words_from_file<P: AsRef<Path>>(
-  path: P, num_chunks: u32, re_special_tokens: Regex, split_special_token: Option<&str>,
-) -> MyResult<BTreeMap<String, Freq>> {
-  let split_special_token = split_special_token.unwrap_or("<|endoftext|>");
-  let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
-  let path = path.as_ref().to_path_buf();
-  let params = boundaries
-    .iter()
-    .zip(boundaries.iter().skip(1))
-    .map(|(start, end)| (*start, (*end - *start) as usize))
-    .collect::<Vec<_>>();
-
-  let words = params
-    .into_par_iter()
-    .map(|(offset, len)| get_words_from_segment(&path, &re_special_tokens.clone(), offset, len))
-    .try_reduce(
-      || BTreeMap::new(),
-      |a, b| {
-        let (mut a, b) = if a.len() < b.len() {
-          (b, a)
-        } else {
-          (a, b)
-        };
-        for (k, v) in b.into_iter() {
-          *a.entry(k).or_default() += v;
-        }
-        Ok(a)
-      },
-    )?;
-  Ok(words)
-}
-
 
 pub fn sort_words(words: &BTreeMap<String, Freq>) -> ordermap::OrderMap<String, Freq> {
   let mut word_freq_vec: Vec<(String, Freq)> = words.iter().map(|(k,v)| (k.clone(), *v)).collect();
@@ -291,7 +307,7 @@ mod tests {
   #[test]
   fn test_pretokenizer() {
     let s = "Hello, world! It's 2024.";
-    let tokens = pretokenizer_counter(s, &RE).unwrap();
+    let tokens = _pretokenizer_counter(s, &DEFAULT_PAT).unwrap();
     let expected_tokens = vec![
       ("Hello", 1),
       (",", 1),
@@ -307,7 +323,7 @@ mod tests {
     assert_eq!(tokens, expected_tokens);
 
     let s = "你好，世界！Now是2024年。";
-    let tokens = pretokenizer_counter(s, &RE).unwrap();
+    let tokens = _pretokenizer_counter(s, &DEFAULT_PAT).unwrap();
     let expected_tokens = vec![
       ("你好", 1),
       ("，", 1),
@@ -326,7 +342,7 @@ mod tests {
   #[test]
   fn test_sample() {
     let input = std::fs::read_to_string("fixtures/tinystories_sample_5M.txt").unwrap();
-    let tokens = pretokenizer_counter(&input, &RE).unwrap();
+    let tokens = _pretokenizer_counter(&input, &DEFAULT_PAT).unwrap();
     assert_eq!(tokens.get(" the").cloned().unwrap_or(0), 48886);
   }
 
@@ -335,12 +351,12 @@ mod tests {
     let path = std::path::Path::new("fixtures/tinystories_sample_5M.txt");
 
     let desired_num_chunks = 4;
-    let boundaries = find_chunk_boundaries(path, desired_num_chunks, "<|endoftext|>").unwrap();
+    let boundaries = _find_chunk_boundaries(path, desired_num_chunks, DEFAULT_EOT).unwrap();
     let expect = vec![0, 1310951, 2621933, 3932548, 5242880];
     assert!(boundaries == expect, "{:?} != {:?}", boundaries, expect);
 
     let desired_num_chunks = 10;
-    let boundaries = find_chunk_boundaries(path, desired_num_chunks, "<|endoftext|>").unwrap();
+    let boundaries = _find_chunk_boundaries(path, desired_num_chunks, DEFAULT_EOT).unwrap();
     let expect = vec![
       0, 525166, 1048920, 1573438, 2097691, 2621933, 3146237, 3670035, 4196392, 4718956, 5242880,
     ];
@@ -353,11 +369,10 @@ mod tests {
     // const NAME: &str = "TinyStoriesV2-GPT4-train";
     let path = format!("fixtures/{NAME}.txt");
     let num_chunks = 16;
-    let words = get_words_from_file(
+    let pre_tokenizer = PreTokenizer::new(&vec![DEFAULT_EOT.to_string()], Some(DEFAULT_EOT));
+    let words = pre_tokenizer.get_words_from_file(
       path,
       num_chunks,
-      create_special_token_regex(&["<|endoftext|>".to_string()]),
-      Some("<|endoftext|>"),
     )
     .unwrap();
     let words = sort_words(&words);
@@ -378,7 +393,7 @@ mod tests {
     let text = std::fs::read_to_string(&path).unwrap();
     let parts = split_special_tokens(
       &text,
-      &create_special_token_regex(&["<|endoftext|>".to_string()]),
+      &create_special_token_regex(&[DEFAULT_EOT.to_string()]),
     ).unwrap();
     assert!(parts.len() == 12915);
   }
@@ -388,9 +403,9 @@ mod tests {
     const NAME: &str = "tinystories_sample_5M";
     let path = format!("fixtures/{NAME}.txt");
     let text = std::fs::read_to_string(&path).unwrap();
-    let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(
+    let tokenizer = PreTokenizer::new(&vec![DEFAULT_EOT.to_string()], Some(DEFAULT_EOT));
+    let (tokens_index, special_tokens_index) = tokenizer.get_tokens_index_from_segment(
       &text,
-      &create_special_token_regex(&["<|endoftext|>".to_string()]),
     ).unwrap();
     let idxs = tokens_index.get(" the").unwrap();
     println!("the idxs length: {:?}", idxs.len());

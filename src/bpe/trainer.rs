@@ -294,7 +294,7 @@ where
 
 #[cfg(test)]
 mod tests {
-  use crate::spec::gpt2::Gpt2Spec;
+  use crate::{pretokenizer::DEFAULT_EOT, spec::gpt2::Gpt2Spec};
 
   use super::*;
 
@@ -430,7 +430,7 @@ mod tests {
     // const NAME: &str = "TinyStoriesV2-GPT4-train";
     let input = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
-    let mut bpe = BpeTrainer::from_words(words, &vec!["<|endoftext|>".to_string()]);
+    let mut bpe = BpeTrainer::from_words(words, &vec![DEFAULT_EOT.to_string()]);
     bpe.init_training();
     let vocab_size = match NAME {
       "tinystories_sample_5M" => 2000,
@@ -458,7 +458,7 @@ mod tests {
     let spec = crate::spec::uni::UniSpec;
     let input = std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap();
     let words: BTreeMap<String, Freq> = serde_json::from_str(&input).unwrap();
-    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(words, &vec!["<|endoftext|>".to_string()]);
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(words, &vec![DEFAULT_EOT.to_string()]);
     bpe.init_training();
     let vocab_size = match NAME {
       "tinystories_sample_5M" | "TinyStories_all_data_zh_1M-sample" => 2000,
