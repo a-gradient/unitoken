@@ -324,14 +324,7 @@ where
   ) -> MyResult<OrderMap<String, Arc<[Idx]>>> {
     let words = input.iter().map(|s| s.to_word()).collect::<Vec<_>>();
     let encoded = self._encode_words(&words)?;
-    let mut cache = OrderMap::from_iter(input.into_iter().zip(encoded.into_iter()).rev().map(|(k, v)| (k, v)));
-    self.special_tokens.keys().try_for_each(|token| -> MyResult<()> {
-      let w = token.to_word();
-      let idx = *self.vocab_rev.get(&w).ok_or(MyError::Oov(w.debug_display()))?;
-      let encoded_special = vec![idx].to_word();
-      cache.insert(token.to_string(), encoded_special);
-      Ok(())
-    })?;
+    let cache = OrderMap::from_iter(input.into_iter().zip(encoded.into_iter()).rev().map(|(k, v)| (k, v)));
     Ok(cache)
   }
 
@@ -348,6 +341,7 @@ where
     self
   }
 
+  #[deprecated(note = "use `encode_file` instead")]
   pub fn encode_file_with_cache<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
   ) -> MyResult<Vec<Idx>> {
@@ -356,10 +350,10 @@ where
     let input = words.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     let cache = self._create_cache_from_words(input)?;
     let bpe_with_cache = self.clone().with_cache(cache);
-    bpe_with_cache._encode_file(path, num_chunks)
+    bpe_with_cache.encode_file(path, num_chunks)
   }
 
-  pub fn encode_file_with_cache_v2<P: AsRef<Path>>(
+  pub fn encode_file<P: AsRef<Path>>(
     &self, path: P, num_chunks: u32,
   ) -> MyResult<Vec<Idx>> {
     let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
@@ -377,41 +371,13 @@ where
       .map(|(index, offset, len)| {
         let buffer = read_file_to_buffer(&path, offset, len)?;
         let content = String::from_utf8_lossy(&buffer);
-        let (tokens_index, special_tokens_index) = get_tokens_index_from_segment(&content, &self.re_special_tokens)?;
-        self.encode_tokens_index(&tokens_index, &special_tokens_index).map(|idxs| (index, idxs))
+        self.encode_string(&content).map(|v| (index, v))
       }).collect::<MyResult<Vec<_>>>()?;
 
     debug!("Finished encoding segments, merging results...");
     segments_tokens_index.sort_by(|(ida, _), (idb, _)| { ida.cmp(idb) });
 
     let result = segments_tokens_index.into_iter().map(|(_, idxs)| idxs).flatten().collect::<Vec<_>>();
-    Ok(result)
-  }
-
-  pub fn _encode_file<P: AsRef<Path>>(
-    &self, path: P, num_chunks: u32
-  ) -> MyResult<Vec<Idx>> {
-    // TODO: handle this
-    let split_special_token = self._split_special_token().unwrap_or("<|endoftext|>");
-    let boundaries = find_chunk_boundaries(&path, num_chunks, split_special_token)?;
-    let path = path.as_ref().to_path_buf();
-    let params = boundaries
-      .iter()
-      .zip(boundaries.iter().skip(1))
-      .enumerate()
-      .map(|(index, (start, end))| (index, *start, (*end - *start) as usize))
-      .collect::<Vec<_>>();
-    let mut segment_results = params
-      .into_iter()
-      .map(|(index, offset, len)| {
-        let buffer = read_file_to_buffer(&path, offset, len)?;
-        let content = String::from_utf8_lossy(&buffer);
-        let segment_result =  self.encode_string(&content)?;
-        Ok((index, segment_result))
-      })
-      .collect::<MyResult<Vec<_>>>()?;
-    segment_results.sort_by_key(|(index, _)| *index);
-    let result = segment_results.into_iter().map(|(_, res)| res).flatten().collect::<Vec<_>>();
     Ok(result)
   }
 }
@@ -503,7 +469,7 @@ mod tests {
   fn test_bpe_encode_file() {
     const NAME: &str = "tinystories_sample_5M";
     let bpe = _setup_bpe(NAME);
-    let result = bpe.encode_file_with_cache(
+    let result = bpe.encode_file(
       format!("fixtures/{NAME}.txt"),
       1,
     ).unwrap();
@@ -520,7 +486,7 @@ mod tests {
     let merges = BpeEncoder::_load_merges(&spec, std::fs::File::open(format!("fixtures/merges.{NAME}.uni.txt")).unwrap(), &vocab).unwrap();
     let merges = merges.into_iter().map(|m| (m.tp, m.target.unwrap())).collect();
     let bpe = BpeEncoder::<Character>::new(vocab, merges, vec!["<|endoftext|>".to_string()]).unwrap();
-    let result = bpe.encode_file_with_cache(
+    let result = bpe.encode_file(
       format!("fixtures/{NAME}.txt"),
       1,
     ).unwrap();

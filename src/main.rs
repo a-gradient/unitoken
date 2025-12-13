@@ -329,8 +329,11 @@ where
 
   info!("Encoding file: {}", input_path.display());
   let idxs = match version {
-    2 => bpe.encode_file_with_cache_v2(&input_path, num_chunks).expect("encode file v2"),
-    _ => bpe.encode_file_with_cache(&input_path, num_chunks).expect("encode file"),
+    2 => bpe.encode_file(&input_path, num_chunks).expect("encode file v2"),
+    _ => {
+      #[allow(deprecated)]
+      bpe.encode_file_with_cache(&input_path, num_chunks).expect("encode file")
+    },
   };
 
   info!("Encoded idxs count: {}", idxs.len());
