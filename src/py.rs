@@ -1,3 +1,5 @@
+#[pyo3::pymodule(gil_used = false)]
+mod _lib {
 use std::path::PathBuf;
 
 use pyo3::prelude::*;
@@ -74,11 +76,28 @@ pub struct BpeTrainer_Character_CharIdx {
   pub inner: BpeTrainer<Character, CharIdx>,
 }
 
-#[pymodule(gil_used = false)]
-#[pyo3(name="_lib")]
-fn _tiktoken(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
-  m.add_class::<BpeTrainerBase>()?;
-  m.add_class::<BpeTrainer_u8_Idx>()?;
-  m.add_class::<BpeTrainer_Character_CharIdx>()?;
-  Ok(())
+// #[pymodule(gil_used = false)]
+// #[pyo3(name="_lib")]
+// fn _tiktoken(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
+//   m.add_class::<BpeTrainerBase>()?;
+//   m.add_class::<BpeTrainer_u8_Idx>()?;
+//   m.add_class::<BpeTrainer_Character_CharIdx>()?;
+//   Ok(())
+// }
+
+
+}
+
+#[test]
+fn generate_py_stubs() {
+  println!("test");
+  let module = pyo3_introspection::introspect_cdylib(
+      "./python/unitoken/_lib.cpython-313-darwin.so",
+      "_lib",
+  )
+  .expect("introspection to succeed");
+  let result = pyo3_introspection::module_stub_files(&module);
+  println!("{result:?}");
+  let value = result.get(&std::path::PathBuf::from("__init__.pyi")).unwrap();
+  std::fs::write("./python/unitoken/_lib.pyi", value).unwrap();
 }

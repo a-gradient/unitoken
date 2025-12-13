@@ -26,7 +26,7 @@ rgb = { version = "0.8.52", optional = true } # optional for textplots
 indicatif = "0.18.3"
 hotpath = "0.8.0"
 npyz = { version = "0.8.4" }
-pyo3 = { version = "0.27.2", optional = true }
+pyo3 = { git = "https://github.com/PyO3/pyo3", optional = true, features = ["experimental-inspect"] }
 
 [profile.dev.package."*"]
 opt-level = 2
@@ -48,3 +48,6 @@ fmt-npz = ["npyz/npz"]
 
 plot = ["dep:textplots", "dep:rgb"]
 py = ["dep:pyo3"]
+
+[dev-dependencies]
+pyo3-introspection = { git = "https://github.com/PyO3/pyo3" }
