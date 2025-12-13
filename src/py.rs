@@ -76,6 +76,61 @@ pub struct BpeTrainer_Character_CharIdx {
   pub inner: BpeTrainer<Character, CharIdx>,
 }
 
+#[pymethods]
+impl BpeTrainer_Character_CharIdx {
+  #[new]
+  pub fn new_py(special_tokens: Vec<String>) -> (Self, BpeTrainerBase) {
+    (
+      Self {
+        inner: BpeTrainer::new(vec![], special_tokens),
+      },
+      BpeTrainerBase {},
+    )
+  }
+
+  pub fn add_words(&mut self, py: Python, words: Vec<(String, i64)>) {
+    py.detach(||
+      self.inner.add_words(&mut words.iter().map(|(w, f)| (w.as_str(), *f)))
+    )
+  }
+
+  pub fn vocab_size(&self) -> usize {
+    self.inner.vocab_size()
+  }
+
+  pub fn init_training(&mut self, py: Python) {
+    py.detach(|| self.inner.init_training())
+  }
+
+  pub fn step(&mut self, py: Python) -> PyResult<()> {
+    py.detach(|| self.inner.step()).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+  }
+
+  pub fn save_vocab(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()> {
+    py.detach(|| {
+      let mut file = std::fs::File::create(&path)?;
+      let mut writer = std::io::BufWriter::new(&mut file);
+      match spec {
+        "gpt2" => Err(MyError::SpecError("gpt2 spec not supported for Character tokenizer".to_string())),
+        "uni" => self.inner.save_vocab_json(&UniSpec, &mut writer),
+        _ => Err(MyError::SpecError(format!("Unknown spec: {}", spec))),
+      }
+    }).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+  }
+
+  pub fn save_merges_txt(&self, py: Python, path: PathBuf, spec: &str) -> PyResult<()> {
+    py.detach(|| {
+      let mut file = std::fs::File::create(&path)?;
+      let mut writer = std::io::BufWriter::new(&mut file);
+      match spec {
+        "gpt2" => Err(MyError::SpecError("gpt2 spec not supported for Character tokenizer".to_string())),
+        "uni" => self.inner.save_merges_txt(&UniSpec, &mut writer),
+        _ => Err(MyError::SpecError(format!("Unknown spec: {}", spec))),
+      }
+    }).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+  }
+}
+
 // #[pymodule(gil_used = false)]
 // #[pyo3(name="_lib")]
 // fn _tiktoken(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
@@ -89,6 +144,7 @@ pub struct BpeTrainer_Character_CharIdx {
 }
 
 #[test]
+// #[ignore = "manual"]
 fn generate_py_stubs() {
   println!("test");
   let module = pyo3_introspection::introspect_cdylib(

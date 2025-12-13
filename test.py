@@ -1,10 +1,11 @@
 # %%
-import unitoken._lib
+from unitoken import BpeTrainer
 
-bpe = unitoken._lib.BpeTrainer_u8_Idx(["<|endoftext|>"])
-print(bpe.vocab_size())
+bpe = BpeTrainer(["<|endoftext|>"], ch="char")
+print(bpe.vocab_size)
 bpe.add_words([("我", 1), ("是", 2), ("一个", 1), ("测试", 1), ("文本", 1)])
 bpe.init_training()
+
 # %%
 for i in range(100):
   try:
@@ -14,7 +15,7 @@ for i in range(100):
     break
 
 # %%
-print(bpe.vocab_size())
+print(bpe.vocab_size)
 # %%
 bpe.save_vocab("vocab.json", "uni")
 bpe.save_merges_txt("merges.txt", "uni")
