@@ -123,11 +123,17 @@ class BpeTrainer:
     self._trainer.init_training()
 
   def train(self, vocab_size: int) -> None:
-    """Train until the vocab reaches `vocab_size` entries or the pair cutoff.
+    """Train until the vocab reaches `vocab_size` entries or no eligible pair remains.
 
-    Training runs inside Rust and may finish below the requested size when the
-    next pair frequency is below `bigram_cutoff_freq`.
+    Training may finish below the requested size when the inventory is
+    exhausted or the next pair frequency is below `bigram_cutoff_freq`.
+    A target smaller than the current vocabulary is rejected.
     """
+    if vocab_size < self.vocab_size:
+      raise ValueError(
+        f"Target vocabulary size {vocab_size} is smaller than "
+        f"the current vocabulary size {self.vocab_size}"
+      )
     self._trainer.train_until(vocab_size)
 
   def step(self) -> int:

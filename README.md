@@ -1,15 +1,63 @@
-unitoken
-=======
+# unitoken
 
 [![CI](https://github.com/tokn-ai/unitoken/actions/workflows/ci.yml/badge.svg)](https://github.com/tokn-ai/unitoken/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/uni-tokenizer.svg)](https://pypi.org/project/uni-tokenizer/)
 [![crates.io](https://img.shields.io/crates/v/unitoken.svg)](https://crates.io/crates/unitoken)
 [![docs.rs](https://docs.rs/unitoken/badge.svg)](https://docs.rs/unitoken)
 
-`unitoken` is a fast BPE tokenizer/trainer with a Rust core and optional Python bindings.
+**unitoken is a Rust-powered BPE toolkit for large, multilingual corpora.**
+It combines Unicode-aware inventory shaping, frequency-safe merge cutoffs,
+exact bounded-memory training, and tiktoken-compatible encoding.
 
-Install
--------
+Python is the easiest way to train and use a tokenizer. Rust exposes the lower-level
+training, encoding, and streaming primitives.
+
+## Why unitoken
+
+- **Shape Unicode-heavy inventories before training.** A two-pass Unicode-bigram
+  pipeline retains frequent adjacent pairs and splits unproductive boundaries,
+  reducing the nearly unique word inventories common in CJK corpora.
+- **Carry measured boundaries into training.** Bigram selection reports its inclusive
+  frequency cutoff, and BPE training can stop before learning a pair below that
+  boundary. Selection includes all ties at the cutoff.
+- **Bound memory without approximating the model.** The optional hot-pair window
+  bounds persistent occurrence postings while preserving global frequencies,
+  winner selection, and deterministic tie-breaking.
+- **Stream corpora through bounded native batches.** Replayable sources, prefetch,
+  mergeable counters, and native counter-to-trainer transfer avoid materializing a
+  complete Python dictionary.
+- **Use familiar model formats and APIs.** Byte models support GPT-2 serialization,
+  Unicode models use unitoken's lossless format, and Python includes a
+  tiktoken-shaped API.
+
+## Measured impact
+
+One release run on the 64 MiB FineWeb2 Chinese fixture, training a 10,000-token
+vocabulary, measured:
+
+| Pipeline | Unique words | BPE training |
+|---|---:|---:|
+| Regular Unicode inventory | 1,803,009 | 26.681 s |
+| Retained Unicode bigrams | 606,153 | 3.702 s |
+
+For this workload, Unicode-bigram shaping produced an approximately 3× smaller
+inventory and 7× faster BPE training. It changes corpus segmentation and should be
+benchmarked on representative text rather than treated as a universal speedup.
+
+On a 1 GiB FineWeb2 Chinese Unicode-bigram inventory, the exact bounded-memory mode
+reduced observed training peak RSS from 1,797 MiB to 1,649 MiB while producing the
+same model; training changed from 5.58 s to 5.85 s and required two hydration scans.
+
+See [BENCHMARKS.md](BENCHMARKS.md) for benchmark contracts, qualifications, and
+reproduction commands.
+
+## Install
+
+Python 3.11 or newer:
+
+```bash
+pip install uni-tokenizer
+```
 
 Rust:
 
@@ -17,84 +65,123 @@ Rust:
 cargo add unitoken
 ```
 
-Python (wheels via PyPI):
+## Five-minute Python quickstart
 
-```bash
-pip install uni-tokenizer
-```
-
-Quickstart (Python)
--------------------
+Train directly from strings, encode and decode without an intermediate file round
+trip, then save a self-describing model directory:
 
 ```python
-from uni_tokenizer import BpeTrainer, BpeEncoder
+from uni_tokenizer import BpeEncoder, train_bpe
 
-trainer = BpeTrainer(["<|endoftext|>"], unit="byte")
-trainer.add_words({"hello": 10, "world": 7})
-trainer.train(vocab_size=256)
-model = trainer.validate_model()
-model.save("demo", format="gpt2")
+model = train_bpe(
+  ["hello world", "hello tokenizer"],
+  vocab_size=280,
+  special_tokens=["<|endoftext|>"],
+)
 
-enc = BpeEncoder.load("demo")
-ids = enc.encode("hello")
+ids = model.encode("hello world")
+assert model.decode(ids) == "hello world"
+
+model.save_pretrained("my-tokenizer")
+encoder = BpeEncoder.from_pretrained("my-tokenizer")
+assert encoder.decode(encoder.encode("hello world")) == "hello world"
 ```
 
-For a model trained from a retained Unicode-bigram selection, configure its
-inclusive cutoff on the trainer:
+`train_bpe` accepts a single string or a one-pass iterable of independent text
+records. Counting is batched in Rust. Training can finish below the requested size
+when the corpus has no eligible pairs left. A target below the initial vocabulary
+size is rejected.
+
+Use `BpeTrainer` and `PreTokenizer` directly when you need compressed word counts,
+Unicode-bigram selection, a custom regex, or manual merge steps.
+
+## Unicode-bigram training with a safe cutoff
+
+Unicode-bigram shaping is an explicit two-pass workflow:
+
+1. Count adjacent Unicode pairs.
+2. Retain the most frequent pairs, including every tie at the boundary.
+3. Count words using the retained pairs.
+4. Carry the measured cutoff into BPE training.
 
 ```python
+from uni_tokenizer import BpeTrainer, PreTokenizer
+
+
+class Corpus:
+  def scan(self):
+    yield "你好世界"
+    yield "你好，tokenizer"
+
+
+corpus = Corpus()
+pretokenizer = PreTokenizer([])
+
+bigram_counter = pretokenizer.bigram_counter()
+bigram_counter.add_source(corpus.scan())
+selection = bigram_counter.select(top_k=100_000, min_freq=2)
+
+word_counter = (
+  pretokenizer
+  .with_unicode_bigrams(selection.bigrams)
+  .word_counter()
+)
+word_counter.add_source(corpus.scan())
+
 trainer = BpeTrainer(
   [],
   unit="unicode",
   bigram_cutoff_freq=selection.cutoff_freq,
 )
+trainer.add_word_counter(word_counter)
+trainer.train(vocab_size=10_000)
 model = trainer.validate_model()
+
+encoder = model.encoder(unicode_bigrams=selection.bigrams)
+model.save_pretrained(
+  "my-unicode-tokenizer",
+  unicode_bigrams=selection.bigrams,
+)
 ```
 
-`train()` stops before a merge below the cutoff. Manual `step()` calls remain
-unrestricted, while validation rejects a final pair merge below the cutoff.
-Equality is valid because bigram selection retains every tie at the cutoff.
+`train()` stops before a new merge below `bigram_cutoff_freq`. Equality is valid
+because selection retains all ties at the cutoff. Manual `step()` calls remain
+available, while model validation rejects a final merge below the configured cutoff.
+Pass the selected bigrams to `model.encoder()` and `model.save_pretrained()` as shown;
+the self-describing directory then restores the same pretokenizer configuration.
 
-Streaming two-pass counting
----------------------------
+`unicode_bigram_mixed_boundary="keep"` is the conservative default: it preserves
+mixed or unmeasured edges and splits unretained script-to-script edges. Use `"split"`
+only when the more aggressive segmentation matches your intended tokenizer.
 
-For corpora that do not fit in memory, expose a replayable source whose
-`scan()` method returns a fresh iterator of text records. Rust pulls and
-processes bounded batches from each scan:
+## Streaming and partitioned counting
+
+`add_source` pulls at most 4,096 records or 64 MiB per batch by default. It overlaps
+Python iteration with Rust processing using one bounded look-ahead batch. Pass
+`prefetch=0` for synchronous processing or override `max_records` and `max_bytes`
+for the record sizes and worker memory available.
+
+Counters can be merged after independently counting corpus partitions:
 
 ```python
-from uni_tokenizer import BpeTrainer, PreTokenizer
+left = pretokenizer.word_counter()
+left.add_source(left_partition)
 
-pretokenizer = PreTokenizer([])
+right = pretokenizer.word_counter()
+right.add_source(right_partition)
 
-bigram_counter = pretokenizer.bigram_counter()
-bigram_counter.add_source(source.scan())
-bigrams = bigram_counter.selected(top_k=100_000, min_freq=16)
-
-word_counter = pretokenizer.with_unicode_bigrams(bigrams).word_counter()
-word_counter.add_source(source.scan())
-
-trainer = BpeTrainer([], unit="byte")
-trainer.add_word_counter(word_counter)
+left.merge(right)
+trainer.add_word_counter(left)
 ```
 
-`add_source` defaults to at most 4,096 records or 64 MiB per batch. Override
-`max_records` and `max_bytes` for the record sizes and worker memory available.
-By default, it overlaps Python source iteration with Rust processing using one
-bounded look-ahead batch; pass `prefetch=0` for synchronous processing.
-Counters can also be merged, so separately counted corpus partitions can be
-reduced before selecting bigrams or training. `add_word_counter` consumes the
-native word inventory without constructing a Python dictionary; the counter is
-empty and reusable afterward. `word_counter.words()` remains available for
-small inventories, but copies the complete result into Python memory.
+`add_word_counter` consumes the native inventory without constructing a Python
+dictionary; the counter is empty and reusable afterward. `word_counter.words()`
+remains available for small inventories but copies the complete result into Python.
 
-Bounded-memory BPE training
----------------------------
+## Exact bounded-memory training
 
-By default, the trainer retains occurrence sets for every discovered pair.
-For large word inventories, `hot_pair_window_size` bounds persistent occurrence
-sets while preserving exact global pair frequencies, winner selection, and
-tie-breaking:
+By default, the trainer retains occurrence postings for every discovered pair.
+Set `hot_pair_window_size` to keep an exact top-K candidate window:
 
 ```python
 trainer = BpeTrainer(
@@ -106,132 +193,91 @@ trainer.add_word_counter(word_counter)
 trainer.train(vocab_size=10_000)
 ```
 
-`4096` is a measured starting point, not a correctness setting. Smaller K uses
-less memory but can require more full inventory scans when a cold pair wins.
-Larger K retains more occurrence sets and generally reduces those scans. On a
-cold winner, the trainer hydrates the exact current top K; newly created pairs
-at or above the latest top-K frequency threshold are admitted immediately. If
-resident pairs grow beyond 2K, they are pruned back to the exact top K.
+Smaller windows use less persistent posting memory but may require more full
+inventory scans when a cold pair wins. Larger windows retain more postings and
+usually reduce hydration. The setting affects resource use, not pair frequencies or
+the resulting model. Inspect `trainer.hot_pair_window_stats` for hydration, pruning,
+resident-pair, and occurrence-capacity diagnostics.
 
-On the 1 GiB FineWeb2 Chinese Unicode-bigram inventory used by the benchmark
-suite (3,855,974 unique words, vocabulary size 10,000), one release run measured:
+## Tiktoken-compatible API
 
-| occurrence mode | observed training peak RSS | total training | hydration scans |
-|---|---:|---:|---:|
-| exact (default) | 1,797 MiB | 5.58s | — |
-| K=4096 | 1,649 MiB | 5.85s | 2 |
-
-Both modes produced the same final merge frequency and model. Inspect
-`trainer.hot_pair_window_stats` for hydration, pruning, resident-pair, and
-occurrence-capacity diagnostics. Corpus shape and target vocabulary size affect
-the best K, so benchmark representative inventories before changing the
-default for a deployment.
-
-Tiktoken-compatible API
------------------------
-
-`unitoken` also exposes a tiktoken-shaped Python API:
+Use the familiar `Encoding` surface with an existing model:
 
 ```python
 from uni_tokenizer import Encoding
 
-enc = Encoding.from_files(
-  "demo",
-  vocab_file="vocab.demo[u8].json",
-  merges_file="merges.demo[u8].txt",
+encoding = Encoding.from_files(
+  "my-tokenizer",
+  vocab_file="my-tokenizer/vocab.json",
+  merges_file="my-tokenizer/merges.txt",
   special_tokens={"<|endoftext|>": 0},
 )
 
-ids = enc.encode("hello world")
-text = enc.decode(ids)
+ids = encoding.encode("hello world")
+text = encoding.decode(ids)
 ```
 
-The package also includes a `uni_tokenizer.tiktoken` namespace with `Encoding`,
-`get_encoding`, `encoding_for_model`, `encoding_name_for_model`, and
-`list_encoding_names`. Built-in registry names are limited to local unitoken
-fixture models for now; use `Encoding.from_files(...)` for trained models.
+The `uni_tokenizer.tiktoken` namespace exports `Encoding`, `get_encoding`,
+`encoding_for_model`, `encoding_name_for_model`, and `list_encoding_names` with
+signatures checked against upstream tiktoken. Built-in registry names are currently
+limited to fixture models; load trained models explicitly.
 
-Benchmark against tiktoken
---------------------------
+## Rust quickstart
 
-Install the dev dependency and run:
+```rust
+use unitoken::{
+  bpe::{BpeTrainer, Idx},
+  traits::Encode,
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let mut trainer = BpeTrainer::<u8, Idx>::from_words(
+    [("hello", 10), ("world", 7)],
+    &[],
+  );
+  trainer.train_until(260)?;
+
+  let model = trainer.validate_model()?;
+  let encoder = model.to_encoder()?;
+  let ids = encoder.encode_string("hello")?;
+
+  assert_eq!(encoder.decode(&ids)?, "hello");
+  Ok(())
+}
+```
+
+The same program is available as `examples/quickstart.rs` and compiled in CI.
+
+## CLI
+
+The Rust CLI is feature-gated:
 
 ```bash
-uv pip install "tiktoken>=0.12.0"
-python benchmarks/compare_tiktoken.py
+cargo run --release --features cli -- train \
+  --vocab-size 10000 \
+  --out out/models \
+  corpus.txt
 ```
 
-The benchmark reports unitoken encode/decode timings and, when upstream
-`tiktoken` is importable, matching upstream timings.
+Run `cargo run --features cli -- train --help` for chunking, boundary, character-unit,
+special-token, and output-format options.
 
-Benchmark training against Hugging Face
----------------------------------------
+## Development
 
-Install the dev dependency and run:
+Build the Python extension in a local environment:
 
 ```bash
-uv pip install "tokenizers>=0.22.1"
-python benchmarks/compare_hf_training.py
+uv sync --dev
+maturin develop --release --features py
+uv run pytest
 ```
 
-The benchmark trains unitoken and Hugging Face `tokenizers` on the same
-word-frequency fixture, checks that the learned byte-level BPE vocabularies
-match, and reports median training speed.
+Useful entry points:
 
-For an end-to-end raw text comparison:
+- `python examples/quickstart.py`
+- `cargo run --example quickstart`
+- `python benchmarks/compare_tiktoken.py`
+- `python benchmarks/compare_hf_training.py`
+- `cargo bench --bench regression -- smoke --repeats 2`
 
-```bash
-python benchmarks/compare_hf_training.py --text out/fineweb2_1GiB.txt --chunk-size 1048576 --boundary line --repeats 1
-```
-
-Raw text mode reports unitoken pretokenization and BPE training phases
-separately, then compares the total against Hugging Face raw training. By
-default, Hugging Face receives the same chunk boundaries as unitoken so vocab
-parity is not affected by iterator boundary differences. Pass
-`--hf-chunk-bytes` to force fixed byte chunks for Hugging Face.
-
-Latest fixed-word trainer profile on the release build, using compressed
-`_words.json` inventories and `vocab_size=10000`:
-
-| dataset | unique words | occurrences | total train | train steps |
-|---|---:|---:|---:|---:|
-| FineWeb English 64MiB | 298,156 | 13,720,494 | 1.151s | 0.968s |
-| FineWeb English 1GiB | 1,656,501 | 219,082,524 | 4.522s | 3.258s |
-| FineWeb2 Chinese 64MiB | 1,803,009 | 5,774,521 | 26.681s | 20.416s |
-| FineWeb2 Chinese bigram 64MiB | 606,153 | 15,901,831 | 3.702s | 3.034s |
-| FineWeb2 Chinese bigram 1GiB | 3,855,974 | 249,919,657 | 20.197s | 14.169s |
-
-The Chinese bigram rows use the unicode-bigram split inventory. The default
-Chinese 1GiB inventory is intentionally omitted from this run; only the bigram
-1GiB Chinese inventory was profiled.
-
-Chunking supports explicit boundary modes:
-
-- `auto`: split on the EOT token when present, otherwise line boundaries, then UTF-8 byte boundaries as a last resort.
-- `eot`: split only on the EOT token.
-- `line`: split on newline boundaries.
-- `utf8`: split near byte boundaries while preserving valid UTF-8.
-
-Use `--chunk-size BYTES` when you want target chunk size instead of a fixed
-chunk count.
-
-Prepare benchmark data
-----------------------
-
-To create a larger raw UTF-8 text sample from local FineWeb2 Parquet shards:
-
-```bash
-python benchmarks/create_fineweb2_sample.py --input-dir /path/to/fineweb2/10BT
-```
-
-This is a data-preparation step. Use the generated text with the CLI or a
-separate benchmark that measures pretokenization/training on raw input.
-
-Building from source
---------------------
-
-This project uses `maturin` for the Python extension module.
-
-```bash
-maturin develop
-```
+unitoken is licensed under the [MIT License](LICENSE).

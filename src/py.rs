@@ -102,6 +102,43 @@ impl BpeModelBase {
     }
   }
 
+  #[getter]
+  /// Reserved special tokens in vocabulary order.
+  pub fn special_tokens(&self) -> Vec<String> {
+    match &self.inner {
+      BpeModelInner::Byte(model) => model.special_tokens().to_vec(),
+      BpeModelInner::Unicode(model) => model.special_tokens().to_vec(),
+    }
+  }
+
+  /// Build an encoder directly from the validated model.
+  #[pyo3(signature = (pat_str=None, unicode_bigrams=None, unicode_bigram_mixed_boundary="keep"))]
+  pub fn encoder(
+    &self,
+    py: Python,
+    pat_str: Option<String>,
+    unicode_bigrams: Option<Vec<String>>,
+    unicode_bigram_mixed_boundary: &str,
+  ) -> PyResult<BpeEncoderBase> {
+    py.detach(|| {
+      let inner: Arc<dyn Encoder<Idx> + Send + Sync> = match &self.inner {
+        BpeModelInner::Byte(model) => Arc::new(configure_encoder(
+          model.to_encoder()?,
+          pat_str.as_deref(),
+          unicode_bigrams.as_deref(),
+          unicode_bigram_mixed_boundary,
+        )?),
+        BpeModelInner::Unicode(model) => Arc::new(configure_encoder(
+          model.to_encoder()?,
+          pat_str.as_deref(),
+          unicode_bigrams.as_deref(),
+          unicode_bigram_mixed_boundary,
+        )?),
+      };
+      Ok(BpeEncoderBase(inner))
+    }).map_err(map_model_error)
+  }
+
   /// Return a view of the validated vocabulary.
   pub fn get_vocab(&self) -> Vocabulary {
     let inner: Box<dyn VocabularyImpl + Send + Sync> = match &self.inner {
@@ -896,6 +933,8 @@ fn new_bpe<C: Clone>(
   merges_file: Option<PathBuf>,
   special_tokens: Option<Vec<String>>,
   pat_str: Option<String>,
+  unicode_bigrams: Option<Vec<String>>,
+  unicode_bigram_mixed_boundary: &str,
   spec: &dyn Spec<C, Idx>,
 ) -> MyResult<BpeEncoderBase>
 where
@@ -916,16 +955,57 @@ where
   } else {
     return Err(MyError::BpeBuilder("Either merges_file or merges must be provided".to_string()));
   }
-  builder= builder.set_special_tokens(special_tokens);
+  builder = builder.set_special_tokens(special_tokens);
   builder = builder.set_pat_str(pat_str);
-  let bpe = builder.build(spec)?;
+  let bpe = configure_encoder(
+    builder.build(spec)?,
+    None,
+    unicode_bigrams.as_deref(),
+    unicode_bigram_mixed_boundary,
+  )?;
   Ok(BpeEncoderBase(Arc::new(bpe)))
+}
+
+fn configure_encoder<C>(
+  mut encoder: BpeEncoder<C>,
+  pat_str: Option<&str>,
+  unicode_bigrams: Option<&[String]>,
+  unicode_bigram_mixed_boundary: &str,
+) -> MyResult<BpeEncoder<C>>
+where
+  BpeEncoder<C>: CanEncode<C, Idx>,
+  C: Clone,
+{
+  if let Some(pat_str) = pat_str {
+    let mut indexed_special_tokens = encoder.special_tokens.iter()
+      .map(|(token, token_id)| (*token_id, token.clone()))
+      .collect::<Vec<_>>();
+    indexed_special_tokens.sort_unstable_by_key(|(token_id, _)| *token_id);
+    let special_tokens = indexed_special_tokens.into_iter()
+      .map(|(_, token)| token)
+      .collect::<Vec<_>>();
+    let end_of_text = special_tokens.first().map(String::as_str);
+    encoder.pre_tokenizer = crate::pretokenizer::PreTokenizer::try_new(
+      &special_tokens,
+      end_of_text,
+      Some(pat_str),
+    )?;
+  }
+  if let Some(bigrams) = unicode_bigrams {
+    encoder.pre_tokenizer = encoder.pre_tokenizer.with_unicode_bigrams(
+      parse_unicode_bigrams(bigrams)?,
+    );
+  }
+  encoder.pre_tokenizer = encoder.pre_tokenizer.with_unicode_bigram_mixed_boundary(
+    UnicodeBigramMixedBoundary::parse(unicode_bigram_mixed_boundary)?,
+  );
+  Ok(encoder)
 }
 
 #[pymethods]
 impl BpeEncoderBase {
   #[new]
-  #[pyo3(signature = (format, unit, vocab, merges, vocab_file, merges_file, special_tokens, pat_str=None))]
+  #[pyo3(signature = (format, unit, vocab, merges, vocab_file, merges_file, special_tokens, pat_str=None, unicode_bigrams=None, unicode_bigram_mixed_boundary="keep"))]
   /// Create a Python BPE encoder.
   ///
   /// The encoder can be created from in-memory `vocab`/`merges` or from file paths.
@@ -939,12 +1019,14 @@ impl BpeEncoderBase {
     merges_file: Option<PathBuf>,
     special_tokens: Option<Vec<String>>,
     pat_str: Option<String>,
+    unicode_bigrams: Option<Vec<String>>,
+    unicode_bigram_mixed_boundary: &str,
   ) -> PyResult<Self> {
     py.detach(||
       match (format, unit) {
-        ("gpt2", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, &Gpt2Spec),
-        ("unitoken", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, &UnitokenSpec),
-        ("unitoken", "unicode") => new_bpe::<Character>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, &UnitokenSpec),
+        ("gpt2", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, &Gpt2Spec),
+        ("unitoken", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, &UnitokenSpec),
+        ("unitoken", "unicode") => new_bpe::<Character>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, &UnitokenSpec),
         _ => Err(MyError::SpecError(format!("format {format} is not compatible with unit {unit}"))),
       }
     ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))

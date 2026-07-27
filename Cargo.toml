@@ -2,7 +2,7 @@
 name = "unitoken"
 version = "0.1.5"
 edition = "2024"
-description = "Fast BPE tokenizer/trainer with a Rust core and Python bindings"
+description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
 repository = "https://github.com/tokn-ai/unitoken"
 readme = "README.md"
 license = "MIT"

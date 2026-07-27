@@ -1001,11 +1001,17 @@ where
   where
     C: Clone,
   {
+    if vocab_size < self.vocab.len() {
+      return Err(MyError::TargetVocabTooSmall {
+        requested: vocab_size,
+        current: self.vocab.len(),
+      });
+    }
     self._build_pre_merges();
     self._metrics();
     while self.vocab.len() < vocab_size {
       let Some(merge) = self._get_largest_merge() else {
-        return Err(MyError::TrainStep);
+        break;
       };
       if merge.target.is_none()
         && self.config.bigram_cutoff_freq.is_some_and(|cutoff| merge.data.freq < cutoff)
@@ -2007,6 +2013,31 @@ mod tests {
 
     trainer.step().unwrap();
     assert_eq!(trainer.last_merge_freq(), Some(6));
+  }
+
+  #[test]
+  fn test_train_until_rejects_target_below_current_vocabulary() {
+    let mut trainer = BpeTrainer::<u8, Idx>::from_words([("ab", 1)], &[]);
+
+    let error = trainer.train_until(255).unwrap_err();
+
+    assert!(matches!(
+      error,
+      MyError::TargetVocabTooSmall {
+        requested: 255,
+        current: 256,
+      }
+    ));
+  }
+
+  #[test]
+  fn test_train_until_stops_when_inventory_is_exhausted() {
+    let mut trainer = BpeTrainer::<u8, Idx>::from_words([("ab", 1)], &[]);
+
+    trainer.train_until(300).unwrap();
+
+    assert_eq!(trainer.vocab_size(), 257);
+    assert_eq!(trainer.last_merge_freq(), Some(1));
   }
 
   #[test]

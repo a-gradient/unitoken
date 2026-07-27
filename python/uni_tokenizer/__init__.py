@@ -1,5 +1,6 @@
 from .trainer import BpeTrainer, FileFormat, Unit
 from .model import BpeModel
+from .training import train_bpe
 from .encoder import BpeEncoder
 from .pretokenizer import BigramCounter, BoundaryMode, PreTokenizer, Source, UnicodeBigramMixedBoundary, UnicodeBigramSelection, WordCounter
 from .tiktoken_compat import (
@@ -34,5 +35,6 @@ __all__ = [
   "encoding_name_for_model",
   "get_encoding",
   "list_encoding_names",
+  "train_bpe",
   "__version__",
 ]

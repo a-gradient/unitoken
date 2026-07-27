@@ -1,5 +1,5 @@
 # %%
-from uni_tokenizer import BpeTrainer, PreTokenizer
+from uni_tokenizer import BpeTrainer, PreTokenizer, train_bpe
 pre = PreTokenizer(["<|endoftext|>"])
 words = pre.get_words_from_file("fixtures/tinystories_sample_5M.txt", chunk_size=64 * 1024)
 
@@ -42,3 +42,10 @@ print(a1)
 assert a1.tolist() == [61, 125, 355, 112, 103, 117, 102, 121, 117, 125, 63]
 
 # %%
+model = train_bpe(
+  ["hello world", "hello tokenizer"],
+  vocab_size=280,
+  special_tokens=["<|endoftext|>"],
+)
+ids = model.encode("hello world")
+assert model.decode(ids) == "hello world"

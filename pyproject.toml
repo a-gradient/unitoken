@@ -1,7 +1,7 @@
 [project]
 name = "uni-tokenizer"
 version = "0.1.5"
-description = "Fast BPE tokenizer/trainer with a Rust core and Python bindings"
+description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,6 +10,7 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/tokn-ai/unitoken"
+Issues = "https://github.com/tokn-ai/unitoken/issues"
 
 [dependency-groups]
 dev = [
