@@ -266,7 +266,7 @@ pub fn _bpe_save_train<C, I>(
   name: &str,
 ) where
   BpeTrainer<C, I>: CanTrain<C, I>,
-  C: CharSplit,
+  C: CharSplit + Clone + Ord,
 {
   let vocab_filename = format!("vocab.{name}.json");
   let merges_filename = format!("merges.{name}.txt");

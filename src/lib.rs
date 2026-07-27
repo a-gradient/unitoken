@@ -36,6 +36,8 @@ pub enum MyError {
   OovBytes(String),
   #[error("No more step could be performed")]
   TrainStep,
+  #[error("Target vocabulary size {requested} is smaller than the current vocabulary size {current}")]
+  TargetVocabTooSmall { requested: usize, current: usize },
   #[error("Specification error: {0}")]
   SpecError(String),
   #[error("Bpe builder: {0}")]

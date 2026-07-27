@@ -1,10 +1,11 @@
 from pathlib import Path
+import json
 import threading
 
 import numpy as np
 import pytest
 
-from uni_tokenizer import BpeEncoder, BpeModel, BpeTrainer, PreTokenizer
+from uni_tokenizer import BpeEncoder, BpeModel, BpeTrainer, PreTokenizer, train_bpe
 from uni_tokenizer._lib import BpeTrainer_Character_CharIdx
 
 
@@ -88,6 +89,23 @@ def test_trainer_exposes_unit_and_singular_vocab() -> None:
 
   assert trainer.unit == "byte"
   assert isinstance(trainer.vocab, dict)
+
+
+def test_train_rejects_target_smaller_than_initial_vocabulary() -> None:
+  trainer = BpeTrainer(["<|endoftext|>"], unit="byte")
+
+  with pytest.raises(ValueError, match="256.*smaller.*257"):
+    trainer.train(vocab_size=256)
+
+
+def test_train_stops_when_inventory_is_exhausted() -> None:
+  trainer = BpeTrainer([], unit="byte")
+  trainer.add_words({"ab": 1})
+
+  trainer.train(vocab_size=300)
+
+  assert trainer.vocab_size == 257
+  assert trainer.last_merge_freq == 1
 
 
 def test_hot_pair_window_matches_exact_python_training() -> None:
@@ -446,6 +464,143 @@ def test_validated_model_is_an_immutable_trainer_snapshot() -> None:
   assert model.vocab == snapshot
   assert trainer.vocab != snapshot
   assert not hasattr(model, "train")
+
+
+@pytest.mark.parametrize(
+  ("unit", "word", "vocab_size"),
+  [("byte", "hello", 261), ("unicode", "你好", 259)],
+)
+def test_validated_model_builds_encoder_without_file_round_trip(
+  unit: str,
+  word: str,
+  vocab_size: int,
+) -> None:
+  trainer = BpeTrainer([], unit=unit)  # type: ignore[arg-type]
+  trainer.add_words({word: 3})
+  trainer.train(vocab_size=vocab_size)
+
+  encoder = trainer.validate_model().encoder()
+  ids = encoder.encode(word)
+
+  assert encoder.decode(ids) == word
+
+
+def test_pretrained_directory_round_trip_preserves_metadata(tmp_path: Path) -> None:
+  trainer = BpeTrainer(["<|endoftext|>"], unit="byte")
+  trainer.add_words({"hello": 3})
+  trainer.train(vocab_size=262)
+  model_dir = tmp_path / "model"
+
+  trainer.validate_model().save_pretrained(model_dir)
+  config = json.loads((model_dir / "unitoken.json").read_text(encoding="utf-8"))
+  encoder = BpeEncoder.from_pretrained(model_dir)
+  ids = encoder.encode("hello")
+
+  assert config == {
+    "version": 1,
+    "unit": "byte",
+    "format": "gpt2",
+    "vocab_file": "vocab.json",
+    "merges_file": "merges.txt",
+    "special_tokens": ["<|endoftext|>"],
+    "pat_str": None,
+    "unicode_bigrams": None,
+    "unicode_bigram_mixed_boundary": "keep",
+    "split_on_vocab_bigrams": True,
+  }
+  assert encoder.decode(ids) == "hello"
+
+
+def test_loading_encoder_does_not_write_to_stdout(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+  trainer = BpeTrainer([], unit="byte")
+  trainer.add_words({"ab": 1})
+  trainer.train(vocab_size=257)
+  trainer.validate_model().save_pretrained(tmp_path)
+  capsys.readouterr()
+
+  BpeEncoder.from_pretrained(tmp_path)
+
+  assert capsys.readouterr().out == ""
+
+
+def test_train_bpe_is_an_end_to_end_entry_point(tmp_path: Path) -> None:
+  model = train_bpe(
+    ["hello world", "hello tokenizer"],
+    vocab_size=280,
+    special_tokens=["<|endoftext|>"],
+  )
+
+  ids = model.encode("hello world")
+  model.save_pretrained(tmp_path)
+
+  assert model.decode(ids) == "hello world"
+  assert BpeEncoder.from_pretrained(tmp_path).decode(ids) == "hello world"
+
+
+def test_pretrained_directory_preserves_unicode_bigram_pretokenizer(tmp_path: Path) -> None:
+  bigrams = ["你好"]
+  pretokenizer = PreTokenizer([], unicode_bigrams=bigrams)
+  counter = pretokenizer.word_counter()
+  counter.add_text("你好世界你好")
+  trainer = BpeTrainer([], unit="unicode")
+  trainer.add_word_counter(counter)
+  trainer.train(vocab_size=270)
+  model = trainer.validate_model()
+  expected = model.encoder(unicode_bigrams=bigrams).encode("你好世界你好")
+
+  model.save_pretrained(tmp_path, unicode_bigrams=bigrams)
+  restored = BpeEncoder.from_pretrained(tmp_path)
+
+  assert restored.encode("你好世界你好") == expected
+
+
+def test_pretrained_directory_preserves_vocab_bigram_opt_out(tmp_path: Path) -> None:
+  trainer = BpeTrainer([], unit="byte")
+  trainer.add_words({"ab": 3})
+  trainer.train(vocab_size=257)
+  model = trainer.validate_model()
+
+  model.save_pretrained(tmp_path, split_on_vocab_bigrams=False)
+  restored = BpeEncoder.from_pretrained(tmp_path)
+  text = "ab" + "x" * 32
+
+  assert restored._encoder.pre_tokenizer().get_words(text) == {text: 1}
+  assert restored.encode(text) == model.encoder().encode(text)
+
+
+def test_pretrained_v1_directory_defaults_vocab_bigram_splitting(
+  tmp_path: Path,
+) -> None:
+  trainer = BpeTrainer([], unit="byte")
+  trainer.add_words({"ab": 3})
+  trainer.train(vocab_size=257)
+  trainer.validate_model().save_pretrained(tmp_path)
+  config_path = tmp_path / "unitoken.json"
+  config = json.loads(config_path.read_text(encoding="utf-8"))
+  del config["split_on_vocab_bigrams"]
+  config_path.write_text(json.dumps(config), encoding="utf-8")
+
+  restored = BpeEncoder.from_pretrained(tmp_path)
+
+  assert restored._encoder.pre_tokenizer().get_words("ab" + "x" * 32) == {
+    "ab": 1,
+    "x": 32,
+  }
+
+
+def test_save_pretrained_validates_configuration_before_writing(tmp_path: Path) -> None:
+  trainer = BpeTrainer([], unit="byte")
+  trainer.add_words({"ab": 1})
+  trainer.train(vocab_size=257)
+  model_dir = tmp_path / "model"
+
+  with pytest.raises(ValueError, match="Unknown unicode bigram mixed boundary"):
+    trainer.validate_model().save_pretrained(
+      model_dir,
+      unicode_bigram_mixed_boundary="invalid",
+    )
+
+  assert not model_dir.exists()
 
 
 def test_source_counters_support_two_pass_replay_and_bounded_batches() -> None:

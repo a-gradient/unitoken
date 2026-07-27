@@ -41,7 +41,10 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build and run Rust tests
-        run: cargo test --all --verbose
+        run: cargo test --all --features cli --verbose
+
+      - name: Run Rust quickstart
+        run: cargo run --example quickstart
 
       - name: Test benchmark comment renderer
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -69,3 +72,6 @@ jobs:
 
       - name: Smoke test (source distribution)
         run: uv run --isolated --no-project --with dist/uni_tokenizer-*.tar.gz test.py
+
+      - name: Run Python quickstart
+        run: uv run python examples/quickstart.py

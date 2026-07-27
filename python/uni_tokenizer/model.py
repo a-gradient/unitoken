@@ -1,9 +1,21 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
 from os import PathLike
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from ._lib import BpeModelBase
+from ._serialization import (
+  MODEL_CONFIG_FILENAME,
+  MODEL_CONFIG_VERSION,
+  ModelConfig,
+  write_model_config,
+)
 from .trainer import FileFormat, Unit, _resolve_format
+
+if TYPE_CHECKING:
+  from .encoder import BpeEncoder
 
 
 class BpeModel:
@@ -11,6 +23,7 @@ class BpeModel:
 
   def __init__(self, model: BpeModelBase) -> None:
     self._model = model
+    self._encoder_cache: BpeEncoder | None = None
 
   @property
   def unit(self) -> Unit:
@@ -26,6 +39,50 @@ class BpeModel:
   def last_merge_freq(self) -> int | None:
     """Frequency of the final pair merge, if the model contains one."""
     return self._model.last_merge_freq
+
+  @property
+  def special_tokens(self) -> list[str]:
+    """Reserved special tokens in vocabulary order."""
+    return list(self._model.special_tokens)
+
+  def encoder(
+    self,
+    *,
+    pat_str: str | None = None,
+    unicode_bigrams: Sequence[str] | None = None,
+    unicode_bigram_mixed_boundary: str = "keep",
+    split_on_vocab_bigrams: bool = True,
+  ) -> "BpeEncoder":
+    """Build an encoder directly from this model."""
+    from .encoder import BpeEncoder
+    use_cache = (
+      pat_str is None
+      and unicode_bigrams is None
+      and unicode_bigram_mixed_boundary == "keep"
+      and split_on_vocab_bigrams
+    )
+    if use_cache and self._encoder_cache is not None:
+      return self._encoder_cache
+    encoder = BpeEncoder._from_encoder(
+      self.unit,
+      self._model.encoder(
+        pat_str=pat_str,
+        unicode_bigrams=unicode_bigrams,
+        unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
+        split_on_vocab_bigrams=split_on_vocab_bigrams,
+      ),
+    )
+    if use_cache:
+      self._encoder_cache = encoder
+    return encoder
+
+  def encode(self, text: str) -> list[int]:
+    """Encode text with the model's default pretokenizer."""
+    return self.encoder().encode(text)
+
+  def decode(self, ids: Sequence[int]) -> str:
+    """Decode token ids into text."""
+    return self.encoder().decode(ids)
 
   def save_vocab_json(
     self,
@@ -62,3 +119,45 @@ class BpeModel:
     resolved_format = _resolve_format(self.unit, format)
     self._model.save_vocab(vocab_path, resolved_format)
     self._model.save_merges_txt(merges_path, resolved_format)
+
+  def save_pretrained(
+    self,
+    directory: str | PathLike,
+    *,
+    format: FileFormat | None = None,
+    pat_str: str | None = None,
+    unicode_bigrams: Sequence[str] | None = None,
+    unicode_bigram_mixed_boundary: str = "keep",
+    split_on_vocab_bigrams: bool = True,
+  ) -> None:
+    """Save a self-describing model directory loadable by `BpeEncoder.from_pretrained`."""
+    # Validate the complete encoding configuration before creating partial output.
+    self.encoder(
+      pat_str=pat_str,
+      unicode_bigrams=unicode_bigrams,
+      unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
+      split_on_vocab_bigrams=split_on_vocab_bigrams,
+    )
+    output_dir = Path(directory)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    resolved_format = _resolve_format(self.unit, format)
+    vocab_file = "vocab.json"
+    merges_file = "merges.txt"
+    self.save_files(
+      output_dir / vocab_file,
+      output_dir / merges_file,
+      format=resolved_format,
+    )
+    config: ModelConfig = {
+      "version": MODEL_CONFIG_VERSION,
+      "unit": self.unit,
+      "format": resolved_format,
+      "vocab_file": vocab_file,
+      "merges_file": merges_file,
+      "special_tokens": self.special_tokens,
+      "pat_str": pat_str,
+      "unicode_bigrams": list(unicode_bigrams) if unicode_bigrams is not None else None,
+      "unicode_bigram_mixed_boundary": unicode_bigram_mixed_boundary,
+      "split_on_vocab_bigrams": split_on_vocab_bigrams,
+    }
+    write_model_config(output_dir / MODEL_CONFIG_FILENAME, config)

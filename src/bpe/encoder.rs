@@ -162,7 +162,7 @@ impl<S> BpeBuilder<S> {
   }
 
   #[must_use]
-  /// Convenience alias for [`Self::set_vocab_size(Some(size))`].
+  /// Convenience alias for [`Self::set_vocab_size`].
   pub fn vocab_size(self, size: usize) -> Self {
     Self {
       vocab_size: Some(size),
@@ -182,7 +182,7 @@ impl<S> BpeBuilder<S> {
   }
 
   #[must_use]
-  /// Convenience alias for [`Self::set_special_tokens(Some(sp))`].
+  /// Convenience alias for [`Self::set_special_tokens`].
   pub fn special_tokens(self, sp: Vec<String>) -> Self {
     Self {
       special_tokens: Some(sp),
@@ -245,7 +245,6 @@ impl BpeBuilder {
   #[must_use]
   /// Load a vocab file using `spec` and store it in this builder.
   pub fn load_vocab_file<C: CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
-    println!("Loading vocab file: {}", filename.as_ref().display());
     let file = std::fs::File::open(filename)?;
     spec.decode_vocab(&mut std::io::BufReader::new(file))
       .map(|vocab| self.set_vocab_c(vocab))
@@ -254,7 +253,6 @@ impl BpeBuilder {
   #[must_use]
   /// Load a merges file using `spec` and store it as raw merges in this builder.
   pub fn load_merges_file<C: Clone + CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
-    println!("Loading merges file: {}", filename.as_ref().display());
     let file = std::fs::File::open(filename)?;
     let merges = spec.decode_merges_raw(&mut std::io::BufReader::new(file))?;
     let merges_raw = merges.into_iter()
@@ -428,7 +426,7 @@ where
     )
   }
 
-  fn new_with_pat_and_vocab_bigrams(
+  pub(crate) fn new_with_pat_and_vocab_bigrams(
     vocab: BTreeMap<Idx, Word<C>>,
     merges: Vec<((Idx, Idx), Idx)>,
     special_tokens: Vec<String>,

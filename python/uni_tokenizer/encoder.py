@@ -3,6 +3,7 @@ from os import PathLike
 from pathlib import Path
 from typing import cast
 from ._lib import BpeEncoderBase
+from ._serialization import read_model_config
 from .trainer import FileFormat, Unit, _resolve_format, _validate_unit
 import numpy as np
 
@@ -33,6 +34,8 @@ class BpeEncoder:
       merges: list[tuple[bytes, bytes]] | None = None,
       vocab: dict[bytes, int] | None = None,
       pat_str: str | None = None,
+      unicode_bigrams: Sequence[str] | None = None,
+      unicode_bigram_mixed_boundary: str = "keep",
       split_on_vocab_bigrams: bool = True,
   ) -> None:
     _validate_unit(unit)
@@ -47,6 +50,8 @@ class BpeEncoder:
       vocab=cast(dict[Sequence[int], int], vocab),
       special_tokens=special_tokens,
       pat_str=pat_str,
+      unicode_bigrams=unicode_bigrams,
+      unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
       split_on_vocab_bigrams=split_on_vocab_bigrams,
     )
 
@@ -69,6 +74,8 @@ class BpeEncoder:
     merges_file: str | PathLike | None = None,
     vocab_file: str | PathLike | None = None,
     pat_str: str | None = None,
+    unicode_bigrams: Sequence[str] | None = None,
+    unicode_bigram_mixed_boundary: str = "keep",
     split_on_vocab_bigrams: bool = True,
   ) -> "BpeEncoder":
     """Load an encoder from vocab/merge files.
@@ -89,6 +96,12 @@ class BpeEncoder:
       Optional directory to resolve `merges_file`/`vocab_file` relative to.
     merges_file / vocab_file:
       Explicit filenames/paths for merges and vocab.
+    pat_str:
+      Optional pretokenizer regex.
+    unicode_bigrams:
+      Optional retained Unicode bigrams used to shape pretokenizer boundaries.
+    unicode_bigram_mixed_boundary:
+      Mixed-boundary policy: `"keep"` or `"split"`.
     split_on_vocab_bigrams:
       Whether encoding may partition PAT words using model-vocabulary bigrams.
       Disable it for byte models when benchmarking shows no benefit.
@@ -115,8 +128,27 @@ class BpeEncoder:
         vocab=None,
         special_tokens=special_tokens,
         pat_str=pat_str,
+        unicode_bigrams=unicode_bigrams,
+        unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
         split_on_vocab_bigrams=split_on_vocab_bigrams,
       ),
+    )
+
+  @classmethod
+  def from_pretrained(cls, directory: str | PathLike) -> "BpeEncoder":
+    """Load an encoder from a directory created by `BpeModel.save_pretrained`."""
+    input_dir = Path(directory)
+    config = read_model_config(input_dir)
+    return cls.load(
+      unit=config["unit"],
+      format=config["format"],
+      special_tokens=config["special_tokens"],
+      merges_file=input_dir / config["merges_file"],
+      vocab_file=input_dir / config["vocab_file"],
+      pat_str=config["pat_str"],
+      unicode_bigrams=config["unicode_bigrams"],
+      unicode_bigram_mixed_boundary=config["unicode_bigram_mixed_boundary"],
+      split_on_vocab_bigrams=config["split_on_vocab_bigrams"],
     )
 
   def encode_word(self, /, word: str) -> list[int]:

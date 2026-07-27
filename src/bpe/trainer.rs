@@ -1407,18 +1407,18 @@ where
       ));
     }
     self.ensure_training_open()?;
+    let base_vocab_size = self.special_tokens.len() + 256;
+    if vocab_size <= base_vocab_size && self.vocab.len() == base_vocab_size {
+      return Ok(());
+    }
     if primary_vocab_ratio == 1.0 {
       return self.train_until(vocab_size);
     }
 
-    let base_vocab_size = self.special_tokens.len() + 256;
     if self.vocab.len() != base_vocab_size {
       return Err(MyError::SpecError(
         "BBPE fallback training must start before ordinary vocabulary growth".to_string(),
       ));
-    }
-    if vocab_size <= base_vocab_size {
-      return Ok(());
     }
 
     let learned_slots = vocab_size.saturating_sub(base_vocab_size);
@@ -1427,6 +1427,12 @@ where
     let primary_target = base_vocab_size + primary_slots;
     let result = (|| {
       self.train_until(primary_target)?;
+      if primary_slots > 0
+        && self.vocab.len() < primary_target
+        && self.config.bigram_cutoff_freq.is_none()
+      {
+        return Err(MyError::TrainStep);
+      }
       if primary_slots == 0 {
         // `train_until` is intentionally a no-op when the target is already
         // reached, but fallback still needs the initial-unit inventory.
@@ -1474,15 +1480,20 @@ where
     C: CharToIdx<I> + Clone,
   {
     self.ensure_training_open()?;
-    if vocab_size <= self.vocab.len() {
+    if vocab_size < self.vocab.len() {
+      return Err(MyError::TargetVocabTooSmall {
+        requested: vocab_size,
+        current: self.vocab.len(),
+      });
+    }
+    if vocab_size == self.vocab.len() {
       return Ok(());
     }
-
     self._build_pre_merges();
     self._metrics();
     while self.vocab.len() < vocab_size {
       let Some(merge) = self._get_largest_merge() else {
-        return Err(MyError::TrainStep);
+        break;
       };
       if merge.target.is_none()
         && self.config.bigram_cutoff_freq.is_some_and(|cutoff| merge.data.freq < cutoff)
@@ -2803,6 +2814,31 @@ mod tests {
 
     trainer.step().unwrap();
     assert_eq!(trainer.last_merge_freq(), Some(6));
+  }
+
+  #[test]
+  fn test_train_until_rejects_target_below_current_vocabulary() {
+    let mut trainer = BpeTrainer::<u8, Idx>::from_words([("ab", 1)], &[]);
+
+    let error = trainer.train_until(255).unwrap_err();
+
+    assert!(matches!(
+      error,
+      MyError::TargetVocabTooSmall {
+        requested: 255,
+        current: 256,
+      }
+    ));
+  }
+
+  #[test]
+  fn test_train_until_stops_when_inventory_is_exhausted() {
+    let mut trainer = BpeTrainer::<u8, Idx>::from_words([("ab", 1)], &[]);
+
+    trainer.train_until(300).unwrap();
+
+    assert_eq!(trainer.vocab_size(), 257);
+    assert_eq!(trainer.last_merge_freq(), Some(1));
   }
 
   #[test]
