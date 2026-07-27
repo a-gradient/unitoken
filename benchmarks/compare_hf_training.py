@@ -15,10 +15,10 @@ from tokenizers import models
 from tokenizers import pre_tokenizers
 from tokenizers import trainers
 
-from uni_tokenizer import BpeTrainer
-from uni_tokenizer import BoundaryMode
-from uni_tokenizer import PreTokenizer
-from uni_tokenizer import WordCounter
+from ffbpe import BpeTrainer
+from ffbpe import BoundaryMode
+from ffbpe import PreTokenizer
+from ffbpe import WordCounter
 
 from common import DEFAULT_CHUNK_SIZE
 from common import REPO_ROOT
@@ -343,7 +343,7 @@ def run_text(args: argparse.Namespace) -> dict[str, Any]:
       chunk_size=args.chunk_size,
       boundary=boundary,
     )
-    hf_chunking = "unitoken chunk boundaries"
+    hf_chunking = "FFBPE chunk boundaries"
 
   unitoken = time_call(
     "unitoken.raw_train",
@@ -383,10 +383,10 @@ def run_text(args: argparse.Namespace) -> dict[str, Any]:
       experiment_name=args.experiment_name,
       notes=[
         "Raw-text mode compares end-to-end training contracts.",
-        "Unitoken timing includes native WordCounter pretokenization plus bounded-window training.",
+        "FFBPE timing includes native WordCounter pretokenization plus bounded-window training.",
         "The native WordCounter is consumed directly without materializing the full inventory in Python.",
-        "Raw unitoken occurrence count is null because computing it through the current Python API would copy the full inventory.",
-        "By default Hugging Face receives unitoken chunk boundaries so vocab parity reflects tokenizer/trainer behavior instead of iterator boundary differences.",
+        "Raw FFBPE occurrence count is null because computing it through the current Python API would copy the full inventory.",
+        "By default Hugging Face receives FFBPE chunk boundaries so vocab parity reflects tokenizer/trainer behavior instead of iterator boundary differences.",
       ],
     ),
     "source": {
@@ -408,12 +408,12 @@ def run_text(args: argparse.Namespace) -> dict[str, Any]:
       without_vocab(unitoken),
       without_vocab(hf),
     ],
-    "note": "Raw-text mode includes unitoken pretokenization plus training. By default Hugging Face receives unitoken's chunk boundaries so vocab parity reflects tokenizer/trainer behavior instead of iterator boundary differences.",
+    "note": "Raw-text mode includes FFBPE pretokenization plus training. By default Hugging Face receives FFBPE's chunk boundaries so vocab parity reflects tokenizer/trainer behavior instead of iterator boundary differences.",
   }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-  parser = argparse.ArgumentParser(description="Benchmark unitoken BPE training against Hugging Face tokenizers.")
+  parser = argparse.ArgumentParser(description="Benchmark FFBPE training against Hugging Face tokenizers.")
   input_group = parser.add_mutually_exclusive_group()
   input_group.add_argument("--words", type=Path, help="JSON word-frequency fixture.")
   input_group.add_argument("--text", type=Path, help="Raw UTF-8 text file for end-to-end training.")
@@ -423,12 +423,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     "--hot-pair-window-size",
     type=int,
     default=DEFAULT_HOT_PAIR_WINDOW_SIZE,
-    help="Retain occurrence postings for only the exact top-K unitoken pair window.",
+    help="Retain occurrence postings for only the exact top-K FFBPE pair window.",
   )
   parser.add_argument("--max-occurrences", type=int, help="Truncate the weighted corpus for a faster smoke benchmark.")
-  parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE, help="Target unitoken pretokenizer chunk size in bytes for --text mode.")
-  parser.add_argument("--boundary", choices=["auto", "eot", "line", "utf8"], default="auto", help="Boundary strategy for unitoken chunking in --text mode.")
-  parser.add_argument("--hf-chunk-bytes", type=int, help="Force fixed byte chunks for Hugging Face in --text mode. Defaults to unitoken chunk boundaries.")
+  parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE, help="Target FFBPE pretokenizer chunk size in bytes for --text mode.")
+  parser.add_argument("--boundary", choices=["auto", "eot", "line", "utf8"], default="auto", help="Boundary strategy for FFBPE chunking in --text mode.")
+  parser.add_argument("--hf-chunk-bytes", type=int, help="Force fixed byte chunks for Hugging Face in --text mode. Defaults to FFBPE chunk boundaries.")
   parser.add_argument("--diff-limit", type=int, default=10)
   add_report_args(parser)
   args = parser.parse_args(argv)

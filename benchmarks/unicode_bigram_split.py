@@ -9,11 +9,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from uni_tokenizer import BpeTrainer
-from uni_tokenizer import BoundaryMode
-from uni_tokenizer import PreTokenizer
-from uni_tokenizer import Unit
-from uni_tokenizer import UnicodeBigramMixedBoundary
+from ffbpe import BpeTrainer
+from ffbpe import BoundaryMode
+from ffbpe import PreTokenizer
+from ffbpe import Unit
+from ffbpe import UnicodeBigramMixedBoundary
 
 from common import DEFAULT_CHUNK_SIZE
 from common import SPECIAL_TOKENS
@@ -127,7 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
   parser.add_argument("--min-freq", type=int, default=16)
   parser.add_argument("--unicode-bigram-mixed-boundary", choices=["keep", "split"], default="keep")
   parser.add_argument("--unit", choices=["byte", "unicode"], default="unicode")
-  parser.add_argument("--vocab-size", type=int, help="Optionally train unitoken on both inventories.")
+  parser.add_argument("--vocab-size", type=int, help="Optionally train FFBPE on both inventories.")
   parser.add_argument("--save-words", type=Path, help="Save the Unicode bigram split word-frequency inventory as JSON.")
   add_report_args(parser)
   args = parser.parse_args(argv)

@@ -1,5 +1,5 @@
 # %%
-from uni_tokenizer import BpeTrainer, PreTokenizer, train_bpe
+from ffbpe import BpeTrainer, PreTokenizer, train_bpe
 pre = PreTokenizer(["<|endoftext|>"])
 words = pre.get_words_from_file("fixtures/tinystories_sample_5M.txt", chunk_size=64 * 1024)
 
@@ -19,7 +19,7 @@ assert len(vocab) == 500
 bpe.save("test")
 
 # %%
-from uni_tokenizer import BpeEncoder
+from ffbpe import BpeEncoder
 import numpy as np
 encoder = BpeEncoder.load("test", unit="unicode")
 a = encoder.encode_to_numpy("Hello, world!")

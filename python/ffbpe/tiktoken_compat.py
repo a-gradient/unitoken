@@ -90,7 +90,7 @@ def _infer_merges_from_ranks(ranks: Mapping[bytes, int]) -> list[tuple[bytes, by
 
 
 class Encoding:
-  """tiktoken-shaped encoding backed by unitoken's Rust BPE encoder."""
+  """tiktoken-shaped encoding backed by FFBPE's Rust BPE encoder."""
 
   def __init__(
       self,
@@ -379,7 +379,7 @@ def _fixture_encoding(name: str) -> Encoding:
   vocab_file = root / f"fixtures/vocab.{name}.json"
   merges_file = root / f"fixtures/merges.{name}.txt"
   if not vocab_file.exists() or not merges_file.exists():
-    raise ValueError(f"Unknown encoding {name!r}. Use Encoding.from_files for local unitoken models.")
+    raise ValueError(f"Unknown encoding {name!r}. Use Encoding.from_files for local FFBPE models.")
   return Encoding.from_files(
     name,
     vocab_file=vocab_file,

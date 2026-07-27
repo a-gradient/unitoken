@@ -6,7 +6,7 @@ from tokenizers import models
 from tokenizers import pre_tokenizers
 from tokenizers import trainers
 
-from uni_tokenizer import BpeTrainer
+from ffbpe import BpeTrainer
 
 
 def _bytes_to_unicode() -> dict[int, str]:

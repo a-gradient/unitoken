@@ -1,4 +1,4 @@
-use unitoken::{
+use ffbpe::{
   bpe::{BpeTrainer, Idx},
   traits::Encode,
 };

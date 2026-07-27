@@ -1,6 +1,6 @@
 # Benchmark methodology
 
-unitoken keeps correctness gates and timing measurements separate. Timing results are
+FFBPE keeps correctness gates and timing measurements separate. Timing results are
 informational unless the input, model, configuration, environment, and output
 fingerprints all match.
 
@@ -31,7 +31,7 @@ target vocabulary size of 10,000:
 | Retained Unicode bigrams | 606,153 | 15,901,831 | 3.702 s | 3.034 s |
 
 The occurrence counts differ because bigram shaping changes segmentation. This
-comparison measures the effect of the unitoken pipeline on inventory shape and
+comparison measures the effect of the FFBPE pipeline on inventory shape and
 training cost; it is not a model-parity claim.
 
 Corpus language, bigram selection parameters, mixed-boundary mode, and vocabulary
@@ -59,7 +59,7 @@ Run:
 python benchmarks/compare_tiktoken.py
 ```
 
-The script checks token equality before reporting unitoken and upstream tiktoken
+The script checks token equality before reporting FFBPE and upstream tiktoken
 encode/decode medians. Do not compare results produced from different vocabularies,
 regexes, special-token policies, or text slices.
 
@@ -77,9 +77,9 @@ For a fixed compressed word inventory:
 python benchmarks/compare_hf_training.py
 ```
 
-unitoken receives `(word, frequency)` pairs directly. Hugging Face receives an
+FFBPE receives `(word, frequency)` pairs directly. Hugging Face receives an
 expanded iterator because its Python trainer API does not accept compressed counts.
-This benchmark demonstrates the value of unitoken's compressed-inventory training
+This benchmark demonstrates the value of FFBPE's compressed-inventory training
 contract; it is not a pure trainer-algorithm comparison.
 
 For an end-to-end raw-text comparison:
@@ -92,7 +92,7 @@ python benchmarks/compare_hf_training.py \
   --repeats 3
 ```
 
-Raw mode reports unitoken pretokenization and BPE training separately, then compares
+Raw mode reports FFBPE pretokenization and BPE training separately, then compares
 their total with Hugging Face raw training. By default, Hugging Face receives the
 same chunk boundaries. Treat a speed result as comparable only when the report also
 confirms vocabulary parity; a report with `same_vocab: false` is diagnostic, not a

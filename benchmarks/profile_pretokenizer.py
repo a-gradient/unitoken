@@ -9,8 +9,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from uni_tokenizer import BoundaryMode
-from uni_tokenizer import PreTokenizer
+from ffbpe import BoundaryMode
+from ffbpe import PreTokenizer
 
 from common import DEFAULT_CHUNK_SIZE
 from common import SPECIAL_TOKENS
@@ -89,7 +89,7 @@ def profile(args: argparse.Namespace) -> dict[str, Any]:
       config_name=args.config_name,
       experiment_name=args.experiment_name,
       notes=[
-        "Profiles unitoken pretokenizer chunk boundary and word inventory phases.",
+        "Profiles FFBPE pretokenizer chunk boundary and word inventory phases.",
       ],
     ),
     "source": {
@@ -111,7 +111,7 @@ def profile(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-  parser = argparse.ArgumentParser(description="Profile unitoken pretokenizer phases on a raw text file.")
+  parser = argparse.ArgumentParser(description="Profile FFBPE pretokenizer phases on a raw text file.")
   parser.add_argument("input", type=Path)
   parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
   parser.add_argument("--boundary", choices=["auto", "eot", "line", "utf8"], default="auto")

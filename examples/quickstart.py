@@ -1,7 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from uni_tokenizer import BpeEncoder, train_bpe
+from ffbpe import BpeEncoder, train_bpe
 
 
 model = train_bpe(

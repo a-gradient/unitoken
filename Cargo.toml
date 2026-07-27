@@ -1,9 +1,9 @@
 [package]
-name = "unitoken"
-version = "0.1.6"
+name = "ffbpe"
+version = "0.1.8"
 edition = "2024"
 description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
-repository = "https://github.com/tokn-ai/unitoken"
+repository = "https://github.com/tokn-ai/ffbpe"
 readme = "README.md"
 license = "MIT"
 keywords = ["tokenizer", "bpe", "nlp"]
@@ -22,7 +22,7 @@ exclude = [
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "unitoken"
+name = "ffbpe"
 path = "src/main.rs"
 required-features = ["cli"]
 

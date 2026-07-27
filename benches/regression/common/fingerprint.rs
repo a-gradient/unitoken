@@ -7,7 +7,7 @@ use std::{
 
 use ahash::AHashSet;
 use sha2::{Digest, Sha256};
-use unitoken::bpe::{BpeModel, CharIdx, Character, Freq, Idx, Merge, PreToken, Word};
+use ffbpe::bpe::{BpeModel, CharIdx, Character, Freq, Idx, Merge, PreToken, Word};
 
 const FINGERPRINT_VERSION: u64 = 1;
 

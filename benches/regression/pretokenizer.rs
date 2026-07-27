@@ -8,7 +8,7 @@ use std::{
 
 use clap::{Args as ClapArgs, ValueEnum};
 use serde::{Deserialize, Serialize};
-use unitoken::{
+use ffbpe::{
   bpe::Freq,
   pretokenizer::{BoundaryMode, ChunkHint, ChunkOptions, PreTokenizer},
 };
@@ -359,14 +359,14 @@ pub fn run(args: Args) -> Result<(), String> {
     .name
     .unwrap_or_else(|| file_stem(&args.text, "pretokenizer"));
   let special_tokens = if args.special_tokens.is_empty() {
-    vec![unitoken::pretokenizer::DEFAULT_EOT.to_string()]
+    vec![ffbpe::pretokenizer::DEFAULT_EOT.to_string()]
   } else {
     args.special_tokens
   };
   let eot_token = args
     .eot_token
     .or_else(|| special_tokens.first().cloned())
-    .unwrap_or_else(|| unitoken::pretokenizer::DEFAULT_EOT.to_string());
+    .unwrap_or_else(|| ffbpe::pretokenizer::DEFAULT_EOT.to_string());
   let case = PretokenizerCaseConfig {
     name: name.clone(),
     text_path: args.text,

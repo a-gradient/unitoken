@@ -1,13 +1,13 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use unitoken::{
+use ffbpe::{
   bpe::{encoder::BpeBuilder, Idx},
   pretokenizer::PreTokenizer,
   spec::gpt2::Gpt2Spec,
   traits::Encode as _,
 };
 
-fn build_gpt2_encoder_from_fixtures(name: &str) -> unitoken::bpe::BpeEncoder<u8> {
+fn build_gpt2_encoder_from_fixtures(name: &str) -> ffbpe::bpe::BpeEncoder<u8> {
   BpeBuilder::new()
     .load_merges_file(format!("fixtures/merges.{name}.txt"), &Gpt2Spec)
     .unwrap()
@@ -18,8 +18,8 @@ fn build_gpt2_encoder_from_fixtures(name: &str) -> unitoken::bpe::BpeEncoder<u8>
 }
 
 fn bench_pretokenizer(c: &mut Criterion) {
-  let special_tokens = vec![unitoken::pretokenizer::DEFAULT_EOT.to_string()];
-  let pre = PreTokenizer::new(&special_tokens, Some(unitoken::pretokenizer::DEFAULT_EOT));
+  let special_tokens = vec![ffbpe::pretokenizer::DEFAULT_EOT.to_string()];
+  let pre = PreTokenizer::new(&special_tokens, Some(ffbpe::pretokenizer::DEFAULT_EOT));
 
   let base = "Once upon a time, in a small village, there lived a cat named Mango.";
   let input = base.repeat(200);

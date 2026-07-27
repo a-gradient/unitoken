@@ -7,13 +7,13 @@ import tiktoken.core
 import tiktoken.load
 import tiktoken.model
 import tiktoken.registry
-import uni_tokenizer.tiktoken as unitiktoken
-import uni_tokenizer.tiktoken.core as unitiktoken_core
-import uni_tokenizer.tiktoken.load as unitiktoken_load
-import uni_tokenizer.tiktoken.model as unitiktoken_model
-import uni_tokenizer.tiktoken.registry as unitiktoken_registry
-from uni_tokenizer import Encoding, list_encoding_names
-from uni_tokenizer.tiktoken_compat import _load_gpt2_vocab
+import ffbpe.tiktoken as unitiktoken
+import ffbpe.tiktoken.core as unitiktoken_core
+import ffbpe.tiktoken.load as unitiktoken_load
+import ffbpe.tiktoken.model as unitiktoken_model
+import ffbpe.tiktoken.registry as unitiktoken_registry
+from ffbpe import Encoding, list_encoding_names
+from ffbpe.tiktoken_compat import _load_gpt2_vocab
 
 
 R50K_PAT = r"'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"
@@ -79,7 +79,7 @@ class TiktokenCompatTests(unittest.TestCase):
 
   def test_unitoken_tiktoken_load_helpers(self) -> None:
     import tempfile
-    import uni_tokenizer.tiktoken.load as load
+    import ffbpe.tiktoken.load as load
 
     with tempfile.TemporaryDirectory() as tmp:
       path = Path(tmp) / "toy.tiktoken"
@@ -89,7 +89,7 @@ class TiktokenCompatTests(unittest.TestCase):
       self.assertTrue(load.check_hash(path.read_bytes(), __import__("hashlib").sha256(path.read_bytes()).hexdigest()))
 
   def test_model_unknown_error_matches_tiktoken_shape(self) -> None:
-    import uni_tokenizer.tiktoken.model as model
+    import ffbpe.tiktoken.model as model
 
     with self.assertRaises(KeyError):
       model.encoding_name_for_model("definitely_nope-model")

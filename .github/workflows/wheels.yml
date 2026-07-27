@@ -45,7 +45,7 @@ jobs:
 
       - name: Smoke test (import)
         run: |
-          python -c "import uni_tokenizer; from uni_tokenizer import BpeEncoder, BpeTrainer, PreTokenizer; print('import ok')"
+          python -c "import ffbpe; from ffbpe import BpeEncoder, BpeTrainer, PreTokenizer; print('import ok')"
           python ./test.py
 
       - name: Upload wheels

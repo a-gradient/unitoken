@@ -93,6 +93,10 @@ unitoken_trainer_regression_v1
 unitoken_codec_regression_v1
 ```
 
+These `unitoken_*` values are stable machine-readable contract identifiers retained
+across the FFBPE rename so historical reports and golden fingerprints remain
+comparable.
+
 Reports contain raw phase durations, phase-boundary RSS, 5 ms sampled peaks,
 the cumulative whole-process high-water mark, and canonical SHA-256
 fingerprints. Trainer reports additionally include bounded-window statistics;
@@ -152,12 +156,12 @@ raw_text_unitoken_trainer_profile
 raw_text_unitoken_vs_hf
 ```
 
-Use `fixed_words_unitoken_training_core_profile` to isolate unitoken trainer
+Use `fixed_words_unitoken_training_core_profile` to isolate the FFBPE trainer
 changes against a compressed `(word, frequency)` inventory. Hugging Face does
 not receive that same compressed representation through the Python API; reports
 with `hf_expanded_iterator` explicitly expand counts into repeated words.
 
-Use `raw_text_unitoken_trainer_profile` to profile unitoken end-to-end training
+Use `raw_text_unitoken_trainer_profile` to profile FFBPE end-to-end training
 from raw text. Use `raw_text_unitoken_vs_hf` for end-to-end implementation
 comparisons against Hugging Face.
 
@@ -195,7 +199,7 @@ python benchmarks/compare_hf_training.py \
   --experiment-name baseline_release
 ```
 
-Example fixed-words unitoken trainer profile:
+Example fixed-words FFBPE trainer profile:
 
 ```bash
 python benchmarks/profile_training_core.py \
@@ -251,7 +255,7 @@ selection boundaries, and inventory statistics. Fixed-word training reports
 load this sidecar automatically and evaluate the frequency guard without
 relying on directory names.
 
-Example raw-text unitoken trainer profile:
+Example raw-text FFBPE trainer profile:
 
 ```bash
 python benchmarks/profile_trainer.py \
