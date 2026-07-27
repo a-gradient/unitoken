@@ -9,9 +9,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from uni_tokenizer import BpeTrainer
-from uni_tokenizer import BoundaryMode
-from uni_tokenizer import PreTokenizer
+from ffbpe import BpeTrainer
+from ffbpe import BoundaryMode
+from ffbpe import PreTokenizer
 
 from common import DEFAULT_CHUNK_SIZE
 from common import SPECIAL_TOKENS
@@ -74,7 +74,7 @@ def train(words: Sequence[tuple[str, int]], vocab_size: int, bucket_size: int) -
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-  parser = argparse.ArgumentParser(description="Profile end-to-end unitoken BPE training from raw UTF-8 text.")
+  parser = argparse.ArgumentParser(description="Profile end-to-end FFBPE training from raw UTF-8 text.")
   parser.add_argument("--text", type=Path, required=True, help="Raw UTF-8 text file.")
   parser.add_argument("--vocab-size", type=int, default=10000)
   parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
@@ -102,7 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
       config_name=args.config_name,
       experiment_name=args.experiment_name,
       notes=[
-        "This is an end-to-end unitoken training profile from raw text.",
+        "This is an end-to-end FFBPE training profile from raw text.",
         "Timing includes pretokenization, add_words, init_training, and BPE steps.",
       ],
     ),

@@ -1173,7 +1173,7 @@ impl BpeEncoderBase {
 #[ignore = "manual"]
 fn generate_py_stubs() {
   println!("test");
-  let package_dir = std::path::Path::new("./python/uni_tokenizer");
+  let package_dir = std::path::Path::new("./python/ffbpe");
   let mut libraries = std::fs::read_dir(package_dir)
     .expect("Python package directory to exist")
     .filter_map(Result::ok)
@@ -1197,5 +1197,5 @@ fn generate_py_stubs() {
   let result = pyo3_introspection::module_stub_files(&module);
   println!("{result:?}");
   let value = result.get(&std::path::PathBuf::from("__init__.pyi")).unwrap();
-  std::fs::write("./python/uni_tokenizer/_lib.pyi", value).unwrap();
+  std::fs::write("./python/ffbpe/_lib.pyi", value).unwrap();
 }

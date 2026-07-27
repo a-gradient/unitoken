@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::Args as ClapArgs;
-use unitoken::pretokenizer::DEFAULT_EOT;
+use ffbpe::pretokenizer::DEFAULT_EOT;
 
 use crate::common::{
   config::Unit,
@@ -653,7 +653,7 @@ mod runner {
   };
 
   use ordermap::OrderMap;
-  use unitoken::{
+  use ffbpe::{
     bpe::{
       BpeTrainer, BpeTrainerConfig, CharIdx, CharSplit, CharToIdx, Character, Freq, HasChar, Idx, IdxLike,
       InitialAlphabet, TieBreak, Word, utils::WordDebugExt,

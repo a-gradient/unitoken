@@ -202,9 +202,9 @@ def module_version(name: str) -> str | None:
   return getattr(module, "__version__", None)
 
 
-def unitoken_extension_path() -> str | None:
+def ffbpe_extension_path() -> str | None:
   try:
-    module = importlib.import_module("uni_tokenizer._lib")
+    module = importlib.import_module("ffbpe._lib")
   except ImportError:
     return None
   module_file = getattr(module, "__file__", None)
@@ -279,9 +279,9 @@ def benchmark_metadata(
       "version": platform.python_version(),
     },
     "packages": {
-      "uni_tokenizer": {
-        "version": module_version("uni_tokenizer"),
-        "extension_path": unitoken_extension_path(),
+      "ffbpe": {
+        "version": module_version("ffbpe"),
+        "extension_path": ffbpe_extension_path(),
       },
       "tokenizers": {
         "version": module_version("tokenizers"),

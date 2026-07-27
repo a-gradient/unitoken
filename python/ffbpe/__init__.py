@@ -13,7 +13,7 @@ from .tiktoken_compat import (
 
 try:
   from importlib.metadata import version as _pkg_version
-  __version__ = _pkg_version("uni-tokenizer")
+  __version__ = _pkg_version("ffbpe")
 except Exception:  # pragma: no cover
   __version__ = "0.0.0"
 

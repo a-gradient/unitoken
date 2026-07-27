@@ -8,10 +8,10 @@ from collections.abc import Sequence
 import threading
 from typing import Any
 
-import uni_tokenizer.tiktoken as tiktoken
+import ffbpe.tiktoken as tiktoken
 import tiktoken_ext
 
-from uni_tokenizer.tiktoken_compat import Encoding, get_encoding as _get_encoding, list_encoding_names
+from ffbpe.tiktoken_compat import Encoding, get_encoding as _get_encoding, list_encoding_names
 
 ENCODINGS: dict[str, Encoding] = {}
 ENCODING_CONSTRUCTORS: dict[str, Callable[[], dict[str, Any]]] | None = None

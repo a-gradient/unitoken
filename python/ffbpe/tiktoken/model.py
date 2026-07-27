@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uni_tokenizer.tiktoken_compat import Encoding, list_encoding_names as _list_encoding_names
+from ffbpe.tiktoken_compat import Encoding, list_encoding_names as _list_encoding_names
 
 from .registry import get_encoding
 

@@ -6,7 +6,7 @@ use std::{
 
 use clap::Args as ClapArgs;
 use serde::Deserialize;
-use unitoken::pretokenizer::DEFAULT_EOT;
+use ffbpe::pretokenizer::DEFAULT_EOT;
 
 use crate::{
   codec::{self, CodecCaseConfig, ModelFormat},
@@ -624,7 +624,7 @@ fn default_split_on_vocab_bigrams() -> bool {
 mod tests {
   use std::path::{Path, PathBuf};
 
-  use unitoken::pretokenizer::DEFAULT_EOT;
+  use ffbpe::pretokenizer::DEFAULT_EOT;
 
   use crate::common::config::Unit;
   use crate::trainer::{

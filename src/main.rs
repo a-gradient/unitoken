@@ -7,7 +7,7 @@ use std::{
   collections::BTreeMap, fs, io::BufReader, path::{Path, PathBuf}
 };
 
-use unitoken::{
+use ffbpe::{
   bpe::{BpeEncoder, BpeTrainer, CharIdx, CharSplit, Character, Idx, encoder::BpeBuilder}, pretokenizer::{BoundaryMode, ChunkHint, ChunkOptions, PreTokenizer, save_words, sort_words}, spec::{Spec, gpt2::Gpt2Spec, unitoken::UnitokenSpec}, traits::{CanEncode, CanTrain, Encode, Train}
 };
 

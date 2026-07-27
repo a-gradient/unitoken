@@ -1,6 +1,6 @@
 [project]
-name = "uni-tokenizer"
-version = "0.1.6"
+name = "ffbpe"
+version = "0.1.8"
 description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,8 +9,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/tokn-ai/unitoken"
-Issues = "https://github.com/tokn-ai/unitoken/issues"
+Repository = "https://github.com/tokn-ai/ffbpe"
+Issues = "https://github.com/tokn-ai/ffbpe/issues"
 
 [dependency-groups]
 dev = [
@@ -30,6 +30,6 @@ build-backend = "maturin"
 
 [tool.maturin]
 python-source = "python"
-module-name = "uni_tokenizer._lib"
+module-name = "ffbpe._lib"
 bindings = "pyo3"
 features = ["py"]

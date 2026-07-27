@@ -11,7 +11,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-from uni_tokenizer import PreTokenizer
+from ffbpe import PreTokenizer
 
 from common import write_word_inventory_manifest
 

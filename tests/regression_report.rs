@@ -35,7 +35,7 @@ const OTHER_MODEL_SHA256: &str = "3333333333333333333333333333333333333333333333
 
 #[test]
 fn semantic_fingerprint_is_stable_and_unit_scoped() {
-  use unitoken::bpe::{BpeTrainer, CharIdx, Character, Idx};
+  use ffbpe::bpe::{BpeTrainer, CharIdx, Character, Idx};
 
   let mut byte = BpeTrainer::<u8, Idx>::from_words([("ab", 7)], &[]);
   byte.train_until(257).unwrap();

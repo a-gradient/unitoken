@@ -8,7 +8,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from uni_tokenizer import BpeTrainer
+from ffbpe import BpeTrainer
 
 from common import SPECIAL_TOKENS
 from common import load_words

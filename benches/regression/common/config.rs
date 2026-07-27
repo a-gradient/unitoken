@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use unitoken::pretokenizer::UnicodeBigramMixedBoundary;
+use ffbpe::pretokenizer::UnicodeBigramMixedBoundary;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]

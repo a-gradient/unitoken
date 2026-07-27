@@ -10,8 +10,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from uni_tokenizer import Encoding
-from uni_tokenizer.tiktoken_compat import _load_gpt2_vocab
+from ffbpe import Encoding
+from ffbpe.tiktoken_compat import _load_gpt2_vocab
 
 from common import REPO_ROOT
 from common import add_report_args
@@ -60,7 +60,7 @@ def load_upstream_tiktoken(name: str, *, fixture_encoding: str, use_registry: bo
 
   module_path = Path(getattr(module, "__file__", "") or "")
   if module_path.is_relative_to(REPO_ROOT / "python"):
-    return None, f"imported unitoken's tiktoken shim at {module_path}, not upstream tiktoken"
+    return None, f"imported FFBPE's tiktoken shim at {module_path}, not upstream tiktoken"
 
   if use_registry:
     try:
@@ -97,7 +97,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
       config_name=args.config_name,
       experiment_name=args.experiment_name,
       notes=[
-        "Compares unitoken's tiktoken-compatible encode/decode path with upstream tiktoken when available.",
+        "Compares FFBPE's tiktoken-compatible encode/decode path with upstream tiktoken when available.",
       ],
     ),
     "source": {
@@ -128,7 +128,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-  parser = argparse.ArgumentParser(description="Compare unitoken's tiktoken-compatible API with upstream tiktoken.")
+  parser = argparse.ArgumentParser(description="Compare FFBPE's tiktoken-compatible API with upstream tiktoken.")
   parser.add_argument("--input", type=Path, default=DEFAULT_FIXTURE)
   parser.add_argument("--bytes", type=int, default=200_000)
   parser.add_argument("--repeats", type=int, default=5)

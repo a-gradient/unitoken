@@ -5,8 +5,8 @@ import threading
 import numpy as np
 import pytest
 
-from uni_tokenizer import BpeEncoder, BpeModel, BpeTrainer, PreTokenizer, train_bpe
-from uni_tokenizer._lib import BpeTrainer_Character_CharIdx
+from ffbpe import BpeEncoder, BpeModel, BpeTrainer, PreTokenizer, train_bpe
+from ffbpe._lib import BpeTrainer_Character_CharIdx
 
 
 def test_pretokenizer_uses_pat_str_and_returns_words() -> None:
@@ -492,10 +492,11 @@ def test_pretrained_directory_round_trip_preserves_metadata(tmp_path: Path) -> N
   model_dir = tmp_path / "model"
 
   trainer.validate_model().save_pretrained(model_dir)
-  config = json.loads((model_dir / "unitoken.json").read_text(encoding="utf-8"))
+  config = json.loads((model_dir / "ffbpe.json").read_text(encoding="utf-8"))
   encoder = BpeEncoder.from_pretrained(model_dir)
   ids = encoder.encode("hello")
 
+  assert not (model_dir / "unitoken.json").exists()
   assert config == {
     "version": 1,
     "unit": "byte",
@@ -575,10 +576,11 @@ def test_pretrained_v1_directory_defaults_vocab_bigram_splitting(
   trainer.add_words({"ab": 3})
   trainer.train(vocab_size=257)
   trainer.validate_model().save_pretrained(tmp_path)
-  config_path = tmp_path / "unitoken.json"
+  config_path = tmp_path / "ffbpe.json"
   config = json.loads(config_path.read_text(encoding="utf-8"))
   del config["split_on_vocab_bigrams"]
-  config_path.write_text(json.dumps(config), encoding="utf-8")
+  (tmp_path / "unitoken.json").write_text(json.dumps(config), encoding="utf-8")
+  config_path.unlink()
 
   restored = BpeEncoder.from_pretrained(tmp_path)
 

@@ -10,7 +10,7 @@ use std::{
 use clap::{Args as ClapArgs, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use unitoken::{
+use ffbpe::{
   bpe::{BpeEncoder, Character, Idx, encoder::BpeBuilder},
   pretokenizer::{PreTokenizer, UnicodeBigramMixedBoundary, parse_unicode_bigrams},
   spec::{gpt2::Gpt2Spec, unitoken::UnitokenSpec},
@@ -386,7 +386,7 @@ pub fn run(args: Args) -> Result<(), String> {
   let rayon_threads = resolve_threads(args.rayon_threads)?;
   let name = args.name.unwrap_or_else(|| file_stem(&args.text, "codec"));
   let special_tokens = if args.special_tokens.is_empty() {
-    vec![unitoken::pretokenizer::DEFAULT_EOT.to_string()]
+    vec![ffbpe::pretokenizer::DEFAULT_EOT.to_string()]
   } else {
     args.special_tokens
   };
@@ -537,12 +537,12 @@ fn load_byte_encoder(config: &CodecCaseConfig) -> Result<(BpeEncoder<u8>, u64, O
   let started = Instant::now();
   let builder = BpeBuilder::new()
     .load_vocab_file(&config.vocab_path, match config.format {
-      ModelFormat::Gpt2 => &Gpt2Spec as &dyn unitoken::spec::Spec<u8, Idx>,
+      ModelFormat::Gpt2 => &Gpt2Spec as &dyn ffbpe::spec::Spec<u8, Idx>,
       ModelFormat::Unitoken => &UnitokenSpec,
     })
     .map_err(|error| ("model_load", error.to_string()))?
     .load_merges_file(&config.merges_path, match config.format {
-      ModelFormat::Gpt2 => &Gpt2Spec as &dyn unitoken::spec::Spec<u8, Idx>,
+      ModelFormat::Gpt2 => &Gpt2Spec as &dyn ffbpe::spec::Spec<u8, Idx>,
       ModelFormat::Unitoken => &UnitokenSpec,
     })
     .map_err(|error| ("model_load", error.to_string()))?

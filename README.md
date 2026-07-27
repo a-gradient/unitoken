@@ -1,18 +1,21 @@
-# unitoken
+# FFBPE
 
-[![CI](https://github.com/tokn-ai/unitoken/actions/workflows/ci.yml/badge.svg)](https://github.com/tokn-ai/unitoken/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/uni-tokenizer.svg)](https://pypi.org/project/uni-tokenizer/)
-[![crates.io](https://img.shields.io/crates/v/unitoken.svg)](https://crates.io/crates/unitoken)
-[![docs.rs](https://docs.rs/unitoken/badge.svg)](https://docs.rs/unitoken)
+[![CI](https://github.com/tokn-ai/ffbpe/actions/workflows/ci.yml/badge.svg)](https://github.com/tokn-ai/ffbpe/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/ffbpe.svg)](https://pypi.org/project/ffbpe/)
+[![crates.io](https://img.shields.io/crates/v/ffbpe.svg)](https://crates.io/crates/ffbpe)
+[![docs.rs](https://docs.rs/ffbpe/badge.svg)](https://docs.rs/ffbpe)
 
-**unitoken is a Rust-powered BPE toolkit for large, multilingual corpora.**
+**FFBPE is fast and faithful byte-pair encoding for large, multilingual corpora.**
+
+Exact BPE at corpus scale.
+
 It combines Unicode-aware inventory shaping, frequency-safe merge cutoffs,
 exact bounded-memory training, and tiktoken-compatible encoding.
 
 Python is the easiest way to train and use a tokenizer. Rust exposes the lower-level
 training, encoding, and streaming primitives.
 
-## Why unitoken
+## Why FFBPE
 
 - **Shape Unicode-heavy inventories before training.** A two-pass Unicode-bigram
   pipeline retains frequent adjacent pairs and splits unproductive boundaries,
@@ -33,7 +36,7 @@ training, encoding, and streaming primitives.
   mergeable counters, and native counter-to-trainer transfer avoid materializing a
   complete Python dictionary.
 - **Use familiar model formats and APIs.** Byte models support GPT-2 serialization,
-  Unicode models use unitoken's lossless format, and Python includes a
+  Unicode models use the lossless legacy `unitoken` format, and Python includes a
   tiktoken-shaped API.
 
 ## Measured impact
@@ -62,14 +65,27 @@ reproduction commands.
 Python 3.11 or newer:
 
 ```bash
-pip install uni-tokenizer
+pip install ffbpe
 ```
 
 Rust:
 
 ```bash
-cargo add unitoken
+cargo add ffbpe
 ```
+
+### Renamed from unitoken
+
+FFBPE 0.1.8 is the first release under the new package name. Install and import
+`ffbpe` for new projects. Existing model directories remain compatible:
+
+- FFBPE writes model metadata to `ffbpe.json`.
+- FFBPE also reads legacy `unitoken.json` metadata.
+- The serialized `unitoken` model format name remains stable, so existing vocab
+  and merge files do not need conversion.
+
+The old packages will receive a separate deprecation-only release after FFBPE is
+available.
 
 ## Five-minute Python quickstart
 
@@ -77,7 +93,7 @@ Train directly from strings, encode and decode without an intermediate file roun
 trip, then save a self-describing model directory:
 
 ```python
-from uni_tokenizer import BpeEncoder, train_bpe
+from ffbpe import BpeEncoder, train_bpe
 
 model = train_bpe(
   ["hello world", "hello tokenizer"],
@@ -120,7 +136,7 @@ Unicode-bigram shaping is an explicit two-pass workflow:
 4. Carry the measured cutoff into BPE training.
 
 ```python
-from uni_tokenizer import BpeTrainer, PreTokenizer
+from ffbpe import BpeTrainer, PreTokenizer
 
 
 class Corpus:
@@ -250,7 +266,7 @@ retention, stacks, and temporary parallel work.
 Use the familiar `Encoding` surface with an existing model:
 
 ```python
-from uni_tokenizer import Encoding
+from ffbpe import Encoding
 
 encoding = Encoding.from_files(
   "my-tokenizer",
@@ -263,7 +279,7 @@ ids = encoding.encode("hello world")
 text = encoding.decode(ids)
 ```
 
-The `uni_tokenizer.tiktoken` namespace exports `Encoding`, `get_encoding`,
+The `ffbpe.tiktoken` namespace exports `Encoding`, `get_encoding`,
 `encoding_for_model`, `encoding_name_for_model`, and `list_encoding_names` with
 signatures checked against upstream tiktoken. Built-in registry names are currently
 limited to fixture models; load trained models explicitly.
@@ -271,7 +287,7 @@ limited to fixture models; load trained models explicitly.
 ## Rust quickstart
 
 ```rust
-use unitoken::{
+use ffbpe::{
   bpe::{BpeTrainer, Idx},
   traits::Encode,
 };
@@ -327,4 +343,4 @@ Useful entry points:
 - `cargo bench --bench regression -- suite smoke`
 - `cargo bench --bench regression -- suite 64mib --check`
 
-unitoken is licensed under the [MIT License](LICENSE).
+FFBPE is licensed under the [MIT License](LICENSE).

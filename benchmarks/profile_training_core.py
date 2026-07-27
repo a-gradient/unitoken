@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from uni_tokenizer import BpeTrainer
+from ffbpe import BpeTrainer
 
 from common import SPECIAL_TOKENS
 from common import add_report_args
@@ -132,7 +132,7 @@ def profile_training_core(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-  parser = argparse.ArgumentParser(description="Profile unitoken BPE training core from a compressed word-frequency inventory.")
+  parser = argparse.ArgumentParser(description="Profile the FFBPE training core from a compressed word-frequency inventory.")
   parser.add_argument("--words", type=Path, required=True, help="JSON word-frequency inventory.")
   parser.add_argument("--vocab-size", type=int, default=10000)
   parser.add_argument("--unit", choices=["byte", "unicode"], default="byte", help="BPE unit used for training.")

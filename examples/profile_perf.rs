@@ -6,7 +6,7 @@ use std::{
   time::{Duration, Instant},
 };
 
-use unitoken::{
+use ffbpe::{
   bpe::{encoder::BpeBuilder, Idx},
   pretokenizer::{split_special_tokens, SplitChunk},
   spec::gpt2::Gpt2Spec,
