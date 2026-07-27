@@ -1,6 +1,6 @@
 [project]
 name = "uni-tokenizer"
-version = "0.1.5"
+version = "0.1.6"
 description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
 readme = "README.md"
 requires-python = ">=3.11"

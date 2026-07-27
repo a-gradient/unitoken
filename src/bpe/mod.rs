@@ -1,12 +1,14 @@
 use std::{collections::{BTreeMap, HashMap}, sync::Arc};
 
+use crate::bigram::{Bigram, VocabBigramIndex};
+
 pub mod trainer;
 mod pair;
 pub mod model;
 pub mod encoder;
 pub mod utils;
 
-pub use trainer::{BpeTrainer, BpeTrainerConfig, InitialAlphabet, TieBreak};
+pub use trainer::{BpeTrainer, BpeTrainerConfig, InitialAlphabet, TieBreak, TrainerMemoryUsage};
 pub use model::BpeModel;
 pub use encoder::BpeEncoder;
 use utils::*;
@@ -78,6 +80,15 @@ impl<C, I> Merge<C, I> {
     v.extend_from_slice(&self.content.0);
     v.extend_from_slice(&self.content.1);
     Arc::<[C]>::from(v.into_boxed_slice())
+  }
+
+  /// Concatenate serialized bytes and canonicalize them for the unit type.
+  ///
+  /// This differs from [`Self::merged_content`] for Unicode byte-fallback
+  /// merges: completing a UTF-8 scalar produces a Unicode unit rather than a
+  /// multi-byte fallback fragment.
+  pub fn canonical_merged_content(&self) -> Word<C> where C: CharSplit {
+    C::merge_output(&self.content.0, &self.content.1)
   }
 
   /// Set the target (new vocab id) for this merge.
@@ -184,6 +195,16 @@ pub trait CharToIdx<I: IdxLike> {
   /// If the character is a byte, it will be converted to an index.
   /// If the character is a unicode character, it will be converted to a `CharIdx::Char`.
   fn char_to_idx(&self, start: u64, byte_vocab: Option<&HashMap<u8, I>>) -> I;
+
+  #[doc(hidden)]
+  fn bbpe_word_to_bytes(_word: &Word<Self>) -> Option<Vec<u8>> where Self: Sized {
+    None
+  }
+
+  #[doc(hidden)]
+  fn bbpe_word_from_bytes(_bytes: &[u8]) -> Option<Word<Self>> where Self: Sized {
+    None
+  }
 }
 
 impl CharToIdx<Idx> for u8 {
@@ -221,6 +242,14 @@ impl CharToIdx<CharIdx> for Character {
       Character::Unicode(c) => c.char_to_idx(start, byte_vocab),
       Character::Byte(b) => b.char_to_idx(start, byte_vocab),
     }
+  }
+
+  fn bbpe_word_to_bytes(word: &Word<Self>) -> Option<Vec<u8>> {
+    Some(<Self as CharSplit>::to_vec_u8(word))
+  }
+
+  fn bbpe_word_from_bytes(bytes: &[u8]) -> Option<Word<Self>> {
+    Some(<Self as CharSplit>::from_vec_u8(bytes))
   }
 }
 
@@ -275,6 +304,61 @@ pub trait CharSplit: Sized {
     v
   }
   fn from_vec_u8(v: &[u8]) -> Word<Self>;
+
+  #[doc(hidden)]
+  /// Concatenate two model words through their canonical byte representation.
+  fn merge_output(left: &Word<Self>, right: &Word<Self>) -> Word<Self> {
+    let mut bytes = Self::to_vec_u8(left);
+    bytes.extend(Self::to_vec_u8(right));
+    Self::from_vec_u8(&bytes)
+  }
+
+  #[doc(hidden)]
+  /// Return whether a vocabulary entry satisfies this unit type's model invariant.
+  ///
+  /// Custom unit types are accepted by default.
+  fn is_valid_model_vocab_word(_word: &Word<Self>) -> bool {
+    true
+  }
+
+  #[doc(hidden)]
+  /// Return whether a merge operand or target satisfies this unit type's model invariant.
+  ///
+  /// Custom unit types are accepted by default.
+  fn is_valid_model_merge_word(_word: &Word<Self>) -> bool {
+    true
+  }
+
+  #[doc(hidden)]
+  /// Return whether a merge is valid for this unit type.
+  ///
+  /// Custom unit types retain their existing permissive behavior by default.
+  fn is_valid_model_merge(
+    _left: &Word<Self>, _right: &Word<Self>, _target: &Word<Self>,
+  ) -> bool {
+    true
+  }
+
+  #[doc(hidden)]
+  /// Return whether ordinary input must reconstruct this merge target from its operands.
+  ///
+  /// Custom unit types keep singleton merge targets directly addressable by default.
+  fn merge_target_requires_split(
+    _left: &Word<Self>, _right: &Word<Self>, _target: &Word<Self>,
+  ) -> bool {
+    false
+  }
+
+  #[doc(hidden)]
+  /// Build the optional vocab-derived index used to split encoding work.
+  ///
+  /// Custom unit types leave the optimization disabled by default.
+  fn build_vocab_bigram_index(
+    _vocab: &BTreeMap<Idx, Word<Self>>,
+    _excluded_token_ids: &AHashSet<Idx>,
+  ) -> VocabBigramIndex {
+    VocabBigramIndex::disabled()
+  }
 }
 impl CharSplit for u8 {
   fn char_split_u8(&self, buffer: &mut Vec<u8>) {
@@ -282,6 +366,22 @@ impl CharSplit for u8 {
   }
   fn from_vec_u8(v: &[u8]) -> Word<Self> {
     v.to_word()
+  }
+
+  fn build_vocab_bigram_index(
+    vocab: &BTreeMap<Idx, Word<Self>>,
+    excluded_token_ids: &AHashSet<Idx>,
+  ) -> VocabBigramIndex {
+    let mut bigrams = VocabBigramIndex::byte();
+    for (idx, token) in vocab {
+      if excluded_token_ids.contains(idx) {
+        continue;
+      }
+      for pair in token.windows(2) {
+        bigrams.insert_byte(Bigram::new(pair[0], pair[1]));
+      }
+    }
+    bigrams
   }
 }
 impl CharSplit for Character {
@@ -304,6 +404,77 @@ impl CharSplit for Character {
   }
   fn from_vec_u8(v: &[u8]) -> Word<Self> {
     _try_combine(v).to_word()
+  }
+
+  fn is_valid_model_vocab_word(word: &Word<Self>) -> bool {
+    if word.iter().all(|unit| matches!(unit, Character::Unicode(_))) {
+      return true;
+    }
+    word.iter().all(|unit| matches!(unit, Character::Byte(_)))
+      && word == &Self::from_vec_u8(&Self::to_vec_u8(word))
+  }
+
+  fn is_valid_model_merge_word(word: &Word<Self>) -> bool {
+    Self::is_valid_model_vocab_word(word)
+  }
+
+  fn is_valid_model_merge(
+    left: &Word<Self>, right: &Word<Self>, target: &Word<Self>,
+  ) -> bool {
+    if target != &Self::merge_output(left, right) {
+      return false;
+    }
+
+    let all_unicode = |word: &Word<Self>| {
+      !word.is_empty() && word.iter().all(|unit| matches!(unit, Character::Unicode(_)))
+    };
+    let all_bytes = |word: &Word<Self>| {
+      !word.is_empty() && word.iter().all(|unit| matches!(unit, Character::Byte(_)))
+    };
+
+    if all_unicode(left) && all_unicode(right) {
+      return all_unicode(target);
+    }
+    if all_bytes(left) && all_bytes(right) {
+      return all_bytes(target)
+        || matches!(target.as_ref(), [Character::Unicode(_)]);
+    }
+    false
+  }
+
+  fn merge_target_requires_split(
+    left: &Word<Self>, right: &Word<Self>, target: &Word<Self>,
+  ) -> bool {
+    let all_bytes = |word: &Word<Self>| {
+      !word.is_empty() && word.iter().all(|unit| matches!(unit, Character::Byte(_)))
+    };
+    all_bytes(left)
+      && all_bytes(right)
+      && matches!(target.as_ref(), [Character::Unicode(_)])
+  }
+
+  fn build_vocab_bigram_index(
+    vocab: &BTreeMap<Idx, Word<Self>>,
+    excluded_token_ids: &AHashSet<Idx>,
+  ) -> VocabBigramIndex {
+    let mut bigrams = AHashSet::new();
+    for (idx, token) in vocab {
+      if excluded_token_ids.contains(idx) {
+        continue;
+      }
+      let mut chars = token.iter().filter_map(|unit| match unit {
+        Character::Unicode(ch) => Some(*ch),
+        Character::Byte(_) => None,
+      });
+      let Some(mut left) = chars.next() else {
+        continue;
+      };
+      for right in chars {
+        bigrams.insert(Bigram::new(left, right));
+        left = right;
+      }
+    }
+    VocabBigramIndex::unicode(bigrams)
   }
 }
 

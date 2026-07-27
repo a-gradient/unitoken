@@ -17,11 +17,14 @@ class BpeEncoder:
   Parameters
   ----------
   unit:
-    Atomic BPE unit: `"byte"` or `"unicode"`.
+    Primary segmentation unit. Unicode models may include UTF-8 byte fallback merges.
   special_tokens:
     Optional list of special tokens. When provided, they are treated as indivisible tokens.
   merges / vocab:
     In-memory merge rules and vocabulary. If omitted, use :meth:`load` to load from files.
+  split_on_vocab_bigrams:
+    Whether encoding may partition PAT words using bigrams derived from the model vocabulary.
+    Disable it for byte models when that optimization is slower for the workload.
   """
   def __init__(
       self,
@@ -33,6 +36,7 @@ class BpeEncoder:
       pat_str: str | None = None,
       unicode_bigrams: Sequence[str] | None = None,
       unicode_bigram_mixed_boundary: str = "keep",
+      split_on_vocab_bigrams: bool = True,
   ) -> None:
     _validate_unit(unit)
     self.unit = unit
@@ -48,6 +52,7 @@ class BpeEncoder:
       pat_str=pat_str,
       unicode_bigrams=unicode_bigrams,
       unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
+      split_on_vocab_bigrams=split_on_vocab_bigrams,
     )
 
   @classmethod
@@ -71,6 +76,7 @@ class BpeEncoder:
     pat_str: str | None = None,
     unicode_bigrams: Sequence[str] | None = None,
     unicode_bigram_mixed_boundary: str = "keep",
+    split_on_vocab_bigrams: bool = True,
   ) -> "BpeEncoder":
     """Load an encoder from vocab/merge files.
 
@@ -80,7 +86,7 @@ class BpeEncoder:
       Optional model name used to derive default filenames:
       `merges.{name}[{unit}].txt` and `vocab.{name}[{unit}].json`.
     unit:
-      Atomic BPE unit (`"byte"` or `"unicode"`).
+      Primary segmentation unit (`"byte"` or `"unicode"`).
     format:
       Override the format used to decode the files (`"gpt2"` or `"unitoken"`).
       If omitted, defaults to `"gpt2"` for byte units and `"unitoken"` for Unicode units.
@@ -96,6 +102,9 @@ class BpeEncoder:
       Optional retained Unicode bigrams used to shape pretokenizer boundaries.
     unicode_bigram_mixed_boundary:
       Mixed-boundary policy: `"keep"` or `"split"`.
+    split_on_vocab_bigrams:
+      Whether encoding may partition PAT words using model-vocabulary bigrams.
+      Disable it for byte models when benchmarking shows no benefit.
     """
     resolved_format = _resolve_format(unit, format)
     if name is not None:
@@ -121,6 +130,7 @@ class BpeEncoder:
         pat_str=pat_str,
         unicode_bigrams=unicode_bigrams,
         unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
+        split_on_vocab_bigrams=split_on_vocab_bigrams,
       ),
     )
 
@@ -138,14 +148,15 @@ class BpeEncoder:
       pat_str=config["pat_str"],
       unicode_bigrams=config["unicode_bigrams"],
       unicode_bigram_mixed_boundary=config["unicode_bigram_mixed_boundary"],
+      split_on_vocab_bigrams=config["split_on_vocab_bigrams"],
     )
 
   def encode_word(self, /, word: str) -> list[int]:
-    """Encode a single word into token ids."""
+    """Encode one already-pretokenized word without PAT or special-token handling."""
     return self._encoder.encode_word(word)
 
   def encode_words(self, /, words: Sequence[str]) -> list[list[int]]:
-    """Encode multiple words into token ids."""
+    """Encode multiple already-pretokenized words into token ids."""
     return self._encoder.encode_words(words)
 
   def encode(self, /, text: str) -> list[int]:

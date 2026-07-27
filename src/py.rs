@@ -51,7 +51,7 @@ pub trait BpeTrainerBaseImpl: Sized {
   fn add_words(&mut self, py: Python, words: Vec<(String, i64)>);
   fn vocab_size(&self) -> usize;
   fn last_merge_freq(&self) -> Option<i64>;
-  fn init_training(&mut self, py: Python);
+  fn init_training(&mut self, py: Python) -> PyResult<()>;
   fn train_until(&mut self, py: Python, vocab_size: usize) -> PyResult<i64>;
   fn step(&mut self, py: Python) -> PyResult<i64>;
   fn get_vocab(&self) -> Vocabulary;
@@ -85,7 +85,7 @@ fn map_model_error(error: MyError) -> PyErr {
 #[pymethods]
 impl BpeModelBase {
   #[getter]
-  /// Atomic BPE unit used by this model.
+  /// Primary segmentation unit used by this model.
   pub fn unit(&self) -> &'static str {
     match self.inner {
       BpeModelInner::Byte(_) => "byte",
@@ -112,25 +112,24 @@ impl BpeModelBase {
   }
 
   /// Build an encoder directly from the validated model.
-  #[pyo3(signature = (pat_str=None, unicode_bigrams=None, unicode_bigram_mixed_boundary="keep"))]
+  #[pyo3(signature = (pat_str=None, unicode_bigrams=None, unicode_bigram_mixed_boundary="keep", split_on_vocab_bigrams=true))]
   pub fn encoder(
     &self,
     py: Python,
     pat_str: Option<String>,
     unicode_bigrams: Option<Vec<String>>,
     unicode_bigram_mixed_boundary: &str,
+    split_on_vocab_bigrams: bool,
   ) -> PyResult<BpeEncoderBase> {
     py.detach(|| {
       let inner: Arc<dyn Encoder<Idx> + Send + Sync> = match &self.inner {
         BpeModelInner::Byte(model) => Arc::new(configure_encoder(
-          model.to_encoder()?,
-          pat_str.as_deref(),
+          model.to_encoder_with_options(pat_str.as_deref(), split_on_vocab_bigrams)?,
           unicode_bigrams.as_deref(),
           unicode_bigram_mixed_boundary,
         )?),
         BpeModelInner::Unicode(model) => Arc::new(configure_encoder(
-          model.to_encoder()?,
-          pat_str.as_deref(),
+          model.to_encoder_with_options(pat_str.as_deref(), split_on_vocab_bigrams)?,
           unicode_bigrams.as_deref(),
           unicode_bigram_mixed_boundary,
         )?),
@@ -203,6 +202,33 @@ fn trainer_config(
     hot_pair_window_size,
     bigram_cutoff_freq,
   })
+}
+
+fn validate_primary_vocab_ratio(primary_vocab_ratio: f64) -> PyResult<()> {
+  if !primary_vocab_ratio.is_finite() || !(0.0..=1.0).contains(&primary_vocab_ratio) {
+    return Err(pyo3::exceptions::PyValueError::new_err(
+      "primary_vocab_ratio must be finite and between 0 and 1",
+    ));
+  }
+  Ok(())
+}
+
+fn trainer_memory_usage<C, I>(trainer: &BpeTrainer<C, I>) -> BTreeMap<&'static str, u64> {
+  let usage = trainer.memory_usage();
+  BTreeMap::from([
+    ("estimated_persistent_bytes", usage.estimated_persistent_bytes as u64),
+    ("word_entries", usage.word_entries as u64),
+    ("word_storage_bytes", usage.word_storage_bytes as u64),
+    ("pair_entries", usage.pair_entries as u64),
+    ("pair_table_bytes", usage.pair_table_bytes as u64),
+    ("occurrence_set_header_bytes", usage.occurrence_set_header_bytes as u64),
+    ("occurrence_capacity_entries", usage.occurrence_capacity_entries as u64),
+    ("occurrence_capacity_bytes", usage.occurrence_capacity_bytes as u64),
+    ("merge_heap_bytes", usage.merge_heap_bytes as u64),
+    ("merge_storage_bytes", usage.merge_storage_bytes as u64),
+    ("vocab_entries", usage.vocab_entries as u64),
+    ("vocab_token_bytes", usage.vocab_token_bytes as u64),
+  ])
 }
 
 fn chunk_options(chunk_size: u64, boundary: &str) -> PyResult<ChunkOptions> {
@@ -295,9 +321,19 @@ impl BpeTrainer_u8_Idx {
     ]))
   }
 
+  #[getter]
+  /// Capacity-backed breakdown of persistent trainer storage.
+  ///
+  /// This attributes trainer-owned allocations and is not process RSS; use it
+  /// to identify why bounded occurrence postings do or do not dominate.
+  pub fn memory_usage(&self) -> BTreeMap<&'static str, u64> {
+    trainer_memory_usage(&self.inner)
+  }
+
   /// Initialize internal training state.
-  pub fn init_training(&mut self, py: Python) {
-    py.detach(|| self.inner.init_training())
+  pub fn init_training(&mut self, py: Python) -> PyResult<()> {
+    py.detach(|| self.inner.init_training());
+    Ok(())
   }
 
   /// Train until the vocabulary reaches `vocab_size` or the pair cutoff.
@@ -409,9 +445,19 @@ impl BpeTrainer_Character_CharIdx {
     ]))
   }
 
+  #[getter]
+  /// Capacity-backed breakdown of persistent trainer storage.
+  ///
+  /// This attributes trainer-owned allocations and is not process RSS; use it
+  /// to identify why bounded occurrence postings do or do not dominate.
+  pub fn memory_usage(&self) -> BTreeMap<&'static str, u64> {
+    trainer_memory_usage(&self.inner)
+  }
+
   /// Initialize internal training state.
-  pub fn init_training(&mut self, py: Python) {
-    py.detach(|| self.inner.init_training())
+  pub fn init_training(&mut self, py: Python) -> PyResult<()> {
+    py.detach(|| self.inner.init_training());
+    Ok(())
   }
 
   /// Train until the vocabulary reaches `vocab_size` or the pair cutoff.
@@ -419,6 +465,22 @@ impl BpeTrainer_Character_CharIdx {
   /// Returns the updated vocabulary size.
   pub fn train_until(&mut self, py: Python, vocab_size: usize) -> PyResult<i64> {
     py.detach(|| self.inner.train_until(vocab_size)).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(self.inner.vocab_size() as i64)
+  }
+
+  /// Train to `vocab_size` with a terminal byte-BPE fallback phase.
+  ///
+  /// Returns the updated vocabulary size.
+  #[pyo3(signature = (vocab_size, *, primary_vocab_ratio=0.9))]
+  pub fn train_until_with_bbpe_fallback(
+    &mut self,
+    py: Python,
+    vocab_size: usize,
+    primary_vocab_ratio: f64,
+  ) -> PyResult<i64> {
+    validate_primary_vocab_ratio(primary_vocab_ratio)?;
+    py.detach(|| self.inner.train_until_with_bbpe_fallback(vocab_size, primary_vocab_ratio))
+      .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     Ok(self.inner.vocab_size() as i64)
   }
 
@@ -935,6 +997,7 @@ fn new_bpe<C: Clone>(
   pat_str: Option<String>,
   unicode_bigrams: Option<Vec<String>>,
   unicode_bigram_mixed_boundary: &str,
+  split_on_vocab_bigrams: bool,
   spec: &dyn Spec<C, Idx>,
 ) -> MyResult<BpeEncoderBase>
 where
@@ -957,9 +1020,9 @@ where
   }
   builder = builder.set_special_tokens(special_tokens);
   builder = builder.set_pat_str(pat_str);
+  builder = builder.set_split_on_vocab_bigrams(split_on_vocab_bigrams);
   let bpe = configure_encoder(
     builder.build(spec)?,
-    None,
     unicode_bigrams.as_deref(),
     unicode_bigram_mixed_boundary,
   )?;
@@ -968,7 +1031,6 @@ where
 
 fn configure_encoder<C>(
   mut encoder: BpeEncoder<C>,
-  pat_str: Option<&str>,
   unicode_bigrams: Option<&[String]>,
   unicode_bigram_mixed_boundary: &str,
 ) -> MyResult<BpeEncoder<C>>
@@ -976,21 +1038,6 @@ where
   BpeEncoder<C>: CanEncode<C, Idx>,
   C: Clone,
 {
-  if let Some(pat_str) = pat_str {
-    let mut indexed_special_tokens = encoder.special_tokens.iter()
-      .map(|(token, token_id)| (*token_id, token.clone()))
-      .collect::<Vec<_>>();
-    indexed_special_tokens.sort_unstable_by_key(|(token_id, _)| *token_id);
-    let special_tokens = indexed_special_tokens.into_iter()
-      .map(|(_, token)| token)
-      .collect::<Vec<_>>();
-    let end_of_text = special_tokens.first().map(String::as_str);
-    encoder.pre_tokenizer = crate::pretokenizer::PreTokenizer::try_new(
-      &special_tokens,
-      end_of_text,
-      Some(pat_str),
-    )?;
-  }
   if let Some(bigrams) = unicode_bigrams {
     encoder.pre_tokenizer = encoder.pre_tokenizer.with_unicode_bigrams(
       parse_unicode_bigrams(bigrams)?,
@@ -1005,11 +1052,12 @@ where
 #[pymethods]
 impl BpeEncoderBase {
   #[new]
-  #[pyo3(signature = (format, unit, vocab, merges, vocab_file, merges_file, special_tokens, pat_str=None, unicode_bigrams=None, unicode_bigram_mixed_boundary="keep"))]
+  #[pyo3(signature = (format, unit, vocab, merges, vocab_file, merges_file, special_tokens, pat_str=None, unicode_bigrams=None, unicode_bigram_mixed_boundary="keep", split_on_vocab_bigrams=true))]
   /// Create a Python BPE encoder.
   ///
   /// The encoder can be created from in-memory `vocab`/`merges` or from file paths.
   /// `format` and `unit` must be compatible.
+  /// Set `split_on_vocab_bigrams` to `false` to keep PAT words intact during BPE.
   pub fn new_py(
     py: Python,
     format: &str, unit: &str,
@@ -1021,12 +1069,13 @@ impl BpeEncoderBase {
     pat_str: Option<String>,
     unicode_bigrams: Option<Vec<String>>,
     unicode_bigram_mixed_boundary: &str,
+    split_on_vocab_bigrams: bool,
   ) -> PyResult<Self> {
     py.detach(||
       match (format, unit) {
-        ("gpt2", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, &Gpt2Spec),
-        ("unitoken", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, &UnitokenSpec),
-        ("unitoken", "unicode") => new_bpe::<Character>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, &UnitokenSpec),
+        ("gpt2", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, split_on_vocab_bigrams, &Gpt2Spec),
+        ("unitoken", "byte") => new_bpe::<u8>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, split_on_vocab_bigrams, &UnitokenSpec),
+        ("unitoken", "unicode") => new_bpe::<Character>(vocab, merges, vocab_file, merges_file, special_tokens, pat_str, unicode_bigrams, unicode_bigram_mixed_boundary, split_on_vocab_bigrams, &UnitokenSpec),
         _ => Err(MyError::SpecError(format!("format {format} is not compatible with unit {unit}"))),
       }
     ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -1039,7 +1088,7 @@ impl BpeEncoderBase {
   }
 
   #[pyo3(name = "encode_word")]
-  /// Encode a single word into token ids.
+  /// Encode one already-pretokenized word without PAT or special-token handling.
   pub fn py_encode_word(&self, py: Python, word: &str) -> PyResult<Vec<Idx>> {
     py.detach(||
       self.0.encode_word(word).map(_arc_to_vec)
@@ -1047,7 +1096,7 @@ impl BpeEncoderBase {
   }
 
   #[pyo3(name = "encode_words")]
-  /// Encode multiple words into token ids.
+  /// Encode multiple already-pretokenized words.
   pub fn py_encode_words(&self, py: Python, words: Vec<String>) -> PyResult<Vec<Vec<Idx>>> {
     py.detach(|| {
       let words = words.iter().map(|i| i.as_str()).collect::<Vec<_>>();
@@ -1124,9 +1173,25 @@ impl BpeEncoderBase {
 #[ignore = "manual"]
 fn generate_py_stubs() {
   println!("test");
+  let package_dir = std::path::Path::new("./python/uni_tokenizer");
+  let mut libraries = std::fs::read_dir(package_dir)
+    .expect("Python package directory to exist")
+    .filter_map(Result::ok)
+    .map(|entry| entry.path())
+    .filter(|path| {
+      path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with("_lib."))
+        && path.extension().is_some_and(|extension| {
+          matches!(extension.to_str(), Some("so" | "pyd" | "dylib" | "dll"))
+        })
+    })
+    .collect::<Vec<_>>();
+  libraries.sort();
+  let library = libraries.into_iter().next()
+    .expect("built Python extension to exist");
   let module = pyo3_introspection::introspect_cdylib(
-      "./python/uni_tokenizer/_lib.cpython-313-darwin.so",
-      "_lib",
+    library,
+    "_lib",
   )
   .expect("introspection to succeed");
   let result = pyo3_introspection::module_stub_files(&module);

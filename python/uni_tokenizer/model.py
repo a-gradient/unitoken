@@ -27,7 +27,7 @@ class BpeModel:
 
   @property
   def unit(self) -> Unit:
-    """Atomic BPE unit used by this model."""
+    """Primary segmentation unit used by this model."""
     return cast(Unit, self._model.unit)
 
   @property
@@ -51,6 +51,7 @@ class BpeModel:
     pat_str: str | None = None,
     unicode_bigrams: Sequence[str] | None = None,
     unicode_bigram_mixed_boundary: str = "keep",
+    split_on_vocab_bigrams: bool = True,
   ) -> "BpeEncoder":
     """Build an encoder directly from this model."""
     from .encoder import BpeEncoder
@@ -58,6 +59,7 @@ class BpeModel:
       pat_str is None
       and unicode_bigrams is None
       and unicode_bigram_mixed_boundary == "keep"
+      and split_on_vocab_bigrams
     )
     if use_cache and self._encoder_cache is not None:
       return self._encoder_cache
@@ -67,6 +69,7 @@ class BpeModel:
         pat_str=pat_str,
         unicode_bigrams=unicode_bigrams,
         unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
+        split_on_vocab_bigrams=split_on_vocab_bigrams,
       ),
     )
     if use_cache:
@@ -125,6 +128,7 @@ class BpeModel:
     pat_str: str | None = None,
     unicode_bigrams: Sequence[str] | None = None,
     unicode_bigram_mixed_boundary: str = "keep",
+    split_on_vocab_bigrams: bool = True,
   ) -> None:
     """Save a self-describing model directory loadable by `BpeEncoder.from_pretrained`."""
     # Validate the complete encoding configuration before creating partial output.
@@ -132,6 +136,7 @@ class BpeModel:
       pat_str=pat_str,
       unicode_bigrams=unicode_bigrams,
       unicode_bigram_mixed_boundary=unicode_bigram_mixed_boundary,
+      split_on_vocab_bigrams=split_on_vocab_bigrams,
     )
     output_dir = Path(directory)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -153,5 +158,6 @@ class BpeModel:
       "pat_str": pat_str,
       "unicode_bigrams": list(unicode_bigrams) if unicode_bigrams is not None else None,
       "unicode_bigram_mixed_boundary": unicode_bigram_mixed_boundary,
+      "split_on_vocab_bigrams": split_on_vocab_bigrams,
     }
     write_model_config(output_dir / MODEL_CONFIG_FILENAME, config)

@@ -17,6 +17,7 @@ class ModelConfig(TypedDict):
   pat_str: str | None
   unicode_bigrams: list[str] | None
   unicode_bigram_mixed_boundary: Literal["keep", "split"]
+  split_on_vocab_bigrams: bool
 
 
 def write_model_config(path: Path, config: ModelConfig) -> None:
@@ -41,6 +42,10 @@ def read_model_config(directory: Path) -> ModelConfig:
       f"expected {MODEL_CONFIG_VERSION}"
     )
 
+  # Version 1 directories written before vocabulary-bigram splitting was exposed
+  # used the current default behavior.
+  value.setdefault("split_on_vocab_bigrams", True)
+
   required = {
     "unit": str,
     "format": str,
@@ -48,6 +53,7 @@ def read_model_config(directory: Path) -> ModelConfig:
     "merges_file": str,
     "special_tokens": list,
     "unicode_bigram_mixed_boundary": str,
+    "split_on_vocab_bigrams": bool,
   }
   for field, field_type in required.items():
     if not isinstance(value.get(field), field_type):

@@ -20,6 +20,12 @@ training, encoding, and streaming primitives.
 - **Carry measured boundaries into training.** Bigram selection reports its inclusive
   frequency cutoff, and BPE training can stop before learning a pair below that
   boundary. Selection includes all ties at the cutoff.
+- **Keep rare Unicode scalars encodable without bloating the alphabet.** Unicode
+  training can reserve part of its learned vocabulary for byte-level fallback merges
+  inside scalars that were not materialized directly.
+- **Accelerate long-word encoding when the vocabulary supports it.** Encoders can
+  partition PAT words using bigrams already present in the model vocabulary, with an
+  explicit opt-out for workloads where the extra scan is not profitable.
 - **Bound memory without approximating the model.** The optional hot-pair window
   bounds persistent occurrence postings while preserving global frequencies,
   winner selection, and deterministic tie-breaking.
@@ -95,6 +101,15 @@ size is rejected.
 Use `BpeTrainer` and `PreTokenizer` directly when you need compressed word counts,
 Unicode-bigram selection, a custom regex, or manual merge steps.
 
+Encoding partitions long PAT words using model-vocabulary bigrams by default. This
+does not change token ids. If profiling shows that the scan is slower for your byte
+model, disable it consistently when creating or saving the encoder:
+
+```python
+encoder = model.encoder(split_on_vocab_bigrams=False)
+model.save_pretrained("my-tokenizer", split_on_vocab_bigrams=False)
+```
+
 ## Unicode-bigram training with a safe cutoff
 
 Unicode-bigram shaping is an explicit two-pass workflow:
@@ -154,6 +169,31 @@ the self-describing directory then restores the same pretokenizer configuration.
 mixed or unmeasured edges and splits unretained script-to-script edges. Use `"split"`
 only when the more aggressive segmentation matches your intended tokenizer.
 
+## Unicode BBPE fallback
+
+Unicode models can spend a configurable share of learned vocabulary slots on byte
+merges inside rare Unicode scalars:
+
+```python
+trainer = BpeTrainer([], unit="unicode")
+trainer.add_word_counter(word_counter)
+trainer.train_with_bbpe_fallback(
+  vocab_size=10_000,
+  primary_vocab_ratio=0.9,
+)
+model = trainer.validate_model()
+```
+
+The ratio applies to learned slots after special tokens and the mandatory 256-byte
+alphabet. Primary Unicode training runs first; the fallback pass then learns only
+inside omitted scalars and never across scalar boundaries. Unused fallback slots
+return to primary training. The resulting model needs no special loading option
+because the behavior is encoded in its merge rules.
+
+Fallback is a target-aware, finalizing operation and must run before ordinary
+vocabulary growth. Use `primary_vocab_ratio=1.0` when no fallback slots should be
+reserved; that delegates to ordinary training and leaves the trainer extendable.
+
 ## Streaming and partitioned counting
 
 `add_source` pulls at most 4,096 records or 64 MiB per batch by default. It overlaps
@@ -198,6 +238,12 @@ inventory scans when a cold pair wins. Larger windows retain more postings and
 usually reduce hydration. The setting affects resource use, not pair frequencies or
 the resulting model. Inspect `trainer.hot_pair_window_stats` for hydration, pruning,
 resident-pair, and occurrence-capacity diagnostics.
+
+The hot window is not a total process-memory bound: the full word inventory and a
+compact global pair table remain resident to preserve exact selection. Inspect
+`trainer.memory_usage` for capacity-backed word, pair-table, occurrence, heap, and
+model storage. Its `estimated_persistent_bytes` intentionally excludes allocator
+retention, stacks, and temporary parallel work.
 
 ## Tiktoken-compatible API
 
@@ -278,6 +324,7 @@ Useful entry points:
 - `cargo run --example quickstart`
 - `python benchmarks/compare_tiktoken.py`
 - `python benchmarks/compare_hf_training.py`
-- `cargo bench --bench regression -- smoke --repeats 2`
+- `cargo bench --bench regression -- suite smoke`
+- `cargo bench --bench regression -- suite 64mib --check`
 
 unitoken is licensed under the [MIT License](LICENSE).

@@ -10,6 +10,7 @@ The Rust regression suites record:
 
 - input and model file identities;
 - tokenizer unit, model format, regex, chunking, and Unicode-bigram configuration;
+- Unicode BBPE allocation and model-vocabulary bigram splitting configuration;
 - token counts and SHA-256 fingerprints;
 - model vocabulary and merge fingerprints;
 - deterministic repeats;
@@ -105,15 +106,29 @@ uv pip install "tokenizers>=0.22.1"
 
 ## Reproducible regression suites
 
-Build and run the Rust benchmark harness:
+Named profiles keep trainer, pretokenizer, and codec cases in one reviewable
+configuration:
 
 ```bash
 cargo bench --bench regression --no-run
-cargo bench --bench regression -- smoke --repeats 2
+cargo bench --bench regression -- suite smoke
+cargo bench --bench regression -- suite 64mib
+cargo bench --bench regression -- suite 1gib
 ```
 
-The harness supports expected input, vocabulary, merge, token-count, token-stream,
-and model fingerprints. See:
+The checked-in smoke profile uses repository fixtures and includes Unicode BBPE
+training plus a codec case for its pinned model. The larger profiles expect prepared
+FineWeb2 Chinese inventories under `out/data/`. Validate configuration and artifact
+dependencies without running benchmark cases:
+
+```bash
+cargo bench --bench regression -- suite 64mib --check
+```
+
+Codec cases can set `split_on_vocab_bigrams: false` for measured opt-out
+comparisons. Reports and encoder fingerprints record that choice. The harness also
+supports expected input, vocabulary, merge, token-count, token-stream, and model
+fingerprints. See:
 
 ```bash
 cargo bench --bench regression -- --help

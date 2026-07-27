@@ -2,6 +2,12 @@
 
 #[path = "../benches/regression/common/mod.rs"]
 mod common;
+#[path = "../benches/regression/codec.rs"]
+mod codec;
+#[path = "../benches/regression/pretokenizer.rs"]
+mod pretokenizer;
+#[path = "../benches/regression/suite.rs"]
+mod suite;
 #[path = "../benches/regression/trainer.rs"]
 mod trainer;
 
@@ -217,6 +223,8 @@ fn case_config(
     special_tokens: Vec::new(),
     bucket_size: 100,
     bigram_cutoff_freq,
+    bbpe_fallback: false,
+    primary_vocab_ratio: 0.9,
     expected_input_sha256: expected_input_sha256.map(str::to_string),
     expected_model_sha256: expected_model_sha256.map(str::to_string),
     rayon_threads: 1,
@@ -276,6 +284,7 @@ fn measurement(model_sha256: &str, last_merge_freq: i64, bigram_cutoff_freq: Opt
       build_trainer_ns: 1,
       init_training_ns: 1,
       training_steps_ns: 1,
+      train_until_ns: None,
       validate_model_ns: 1,
       fingerprint_ns: 1,
       core_training_ns: 3,
@@ -294,6 +303,35 @@ fn measurement(model_sha256: &str, last_merge_freq: i64, bigram_cutoff_freq: Opt
       sampled_peak_during_training_bytes: None,
       rss_sample_interval_ms: None,
       process_peak_rss_through_training_bytes: None,
+      structural_after_trainer_build: trainer::report::StructuralMemoryReport {
+        estimated_persistent_bytes: 0,
+        word_storage_bytes: 0,
+        pair_table_bytes: 0,
+        occurrence_set_header_bytes: 0,
+        occurrence_capacity_bytes: 0,
+        merge_heap_entries: 0,
+        merge_heap_capacity: 0,
+        merge_heap_bytes: 0,
+        merge_storage_bytes: 0,
+        vocab_token_bytes: 0,
+        pair_entries: 0,
+        occurrence_capacity_entries: 0,
+      },
+      structural_after_init_training: None,
+      structural_after_training: trainer::report::StructuralMemoryReport {
+        estimated_persistent_bytes: 0,
+        word_storage_bytes: 0,
+        pair_table_bytes: 0,
+        occurrence_set_header_bytes: 0,
+        occurrence_capacity_bytes: 0,
+        merge_heap_entries: 0,
+        merge_heap_capacity: 0,
+        merge_heap_bytes: 0,
+        merge_storage_bytes: 0,
+        vocab_token_bytes: 0,
+        pair_entries: 0,
+        occurrence_capacity_entries: 0,
+      },
     },
     step_buckets: Vec::new(),
     model_valid: true,

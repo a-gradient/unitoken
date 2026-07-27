@@ -1,4 +1,4 @@
-use std::{cmp::{Ordering, Reverse}, collections::{BinaryHeap, BTreeMap, BTreeSet, HashMap}, hash::Hash, ops::Range, sync::atomic::AtomicU64};
+use std::{cmp::{Ordering, Reverse}, collections::{BinaryHeap, BTreeMap, BTreeSet, HashMap, HashSet}, hash::Hash, mem::size_of, ops::Range, sync::atomic::AtomicU64};
 
 use ahash::{AHashMap, AHashSet};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -8,6 +8,40 @@ use crate::{MyError, MyResult, traits::{CanStrToWord, CanToWord, CanTrain, Train
 use super::*;
 use super::pair::{PairState, PairStore};
 pub use super::pair::HotPairWindowStats;
+
+/// Capacity-backed storage owned by a BPE trainer.
+///
+/// This is intentionally not an RSS measurement. It attributes persistent
+/// trainer allocations to their owning data structure, while process RSS also
+/// contains allocator retention, thread stacks, code, and transient work.
+/// `estimated_persistent_bytes` is therefore best used to compare modes and
+/// identify the dominant persistent category, not as a replacement for RSS.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrainerMemoryUsage {
+  pub word_entries: usize,
+  pub word_entry_capacity: usize,
+  pub word_storage_bytes: usize,
+  pub pair_entries: usize,
+  pub pair_table_capacity: usize,
+  pub pair_table_bytes: usize,
+  pub occurrence_set_slots: usize,
+  pub occurrence_set_slot_capacity: usize,
+  pub occurrence_set_header_bytes: usize,
+  pub occurrence_capacity_entries: usize,
+  pub occurrence_capacity_bytes: usize,
+  pub merge_heap_entries: usize,
+  pub merge_heap_capacity: usize,
+  pub merge_heap_bytes: usize,
+  pub merge_entries: usize,
+  pub merge_storage_bytes: usize,
+  pub vocab_entries: usize,
+  pub vocab_token_bytes: usize,
+  pub estimated_persistent_bytes: usize,
+}
+
+fn bbpe_unit_error() -> MyError {
+  MyError::SpecError("bbpe_fallback requires a Unicode trainer".to_string())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitialAlphabet {
@@ -48,7 +82,7 @@ impl Default for TieBreak {
   }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BpeTrainerConfig {
   pub initial_alphabet: InitialAlphabet,
   pub tie_break: TieBreak,
@@ -60,13 +94,27 @@ pub struct BpeTrainerConfig {
   /// Keep occurrence postings for only a resident top-K pair window.
   ///
   /// `None` preserves the full exact occurrence map. A positive value enables
-  /// K-to-2K hysteresis with cold-winner hydration scans.
+  /// K-to-2K occurrence hysteresis with cold-winner hydration scans. It also
+  /// bounds the merge-candidate heap to a top-K frontier rebuilt from the
+  /// authoritative pair table when that frontier is exhausted.
   pub hot_pair_window_size: Option<usize>,
   /// Stop automatic training before applying a merge below this frequency.
   ///
   /// Manual [`Train::step`] calls ignore this policy, while model validation
   /// rejects any resulting final pair merge below the cutoff.
   pub bigram_cutoff_freq: Option<Freq>,
+}
+
+impl Default for BpeTrainerConfig {
+  fn default() -> Self {
+    Self {
+      initial_alphabet: InitialAlphabet::default(),
+      tie_break: TieBreak::default(),
+      parallel_merge_min_occurs_in: None,
+      hot_pair_window_size: None,
+      bigram_cutoff_freq: None,
+    }
+  }
 }
 
 impl BpeTrainerConfig {
@@ -79,6 +127,14 @@ impl BpeTrainerConfig {
       bigram_cutoff_freq: None,
     }
   }
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+enum TrainingState {
+  #[default]
+  Open,
+  BbpeFinalized { vocab_size: usize },
+  Poisoned,
 }
 
 fn byte_level_alphabet_bytes() -> Vec<u8> {
@@ -123,7 +179,11 @@ pub struct BpeTrainer<C, I> {
   pub merges: Vec<Merge<C, I>>,
   pub(crate) pre_merges: PairStore<C, I>,
   merge_heap: BinaryHeap<MergeCandidate<C, I>>,
+  merge_heap_cutoff: Option<MergeCandidate<C, I>>,
   pub words: Vec<PreToken<C, I>>,
+  frozen_initial_units: AHashSet<I>,
+  last_event_freq: Option<Freq>,
+  training_state: TrainingState,
 }
 
 #[derive(Debug, Clone)]
@@ -229,20 +289,42 @@ impl<I> Default for PreMergePartial<I> {
 #[inline]
 fn collect_pre_merge_partial<C, I>(
   words: &[PreToken<C, I>], word_offset: usize, vocab: &BTreeMap<I, Word<C>>,
-  collect_occurrences: bool,
+  frozen_initial_units: &AHashSet<I>, collect_occurrences: bool,
 ) -> PreMergePartial<I>
 where
   I: Copy + Eq + Hash + Ord,
 {
   let mut partial = PreMergePartial::default();
+  if frozen_initial_units.is_empty() {
+    for (local_word_idx, word) in words.iter().enumerate() {
+      let word_idx = (word_offset + local_word_idx) as u64;
+      for unit in word.idxs.iter().copied() {
+        if !vocab.contains_key(&unit) {
+          *partial.initial_freqs.entry(unit).or_default() += word.freq;
+        }
+      }
+      for tp in word.idxs.iter().copied().zip(word.idxs.iter().skip(1).copied()) {
+        let entry = partial.pairs.entry(tp).or_default();
+        entry.freq += word.freq;
+        if collect_occurrences && entry.occurs_in.last().copied() != Some(word_idx) {
+          entry.occurs_in.push(word_idx);
+        }
+      }
+    }
+    return partial;
+  }
+
   for (local_word_idx, word) in words.iter().enumerate() {
     let word_idx = (word_offset + local_word_idx) as u64;
     for unit in word.idxs.iter().copied() {
-      if !vocab.contains_key(&unit) {
+      if !frozen_initial_units.contains(&unit) && !vocab.contains_key(&unit) {
         *partial.initial_freqs.entry(unit).or_default() += word.freq;
       }
     }
     for tp in word.idxs.iter().copied().zip(word.idxs.iter().skip(1).copied()) {
+      if frozen_initial_units.contains(&tp.0) || frozen_initial_units.contains(&tp.1) {
+        continue;
+      }
       let entry = partial.pairs.entry(tp).or_default();
       entry.freq += word.freq;
       // A pair records each word once, even when it occurs repeatedly in that word.
@@ -257,7 +339,7 @@ where
 #[inline]
 fn collect_pre_merge_range<C, I>(
   words: &[PreToken<C, I>], range: &PreMergeRange, vocab: &BTreeMap<I, Word<C>>,
-  collect_occurrences: bool,
+  frozen_initial_units: &AHashSet<I>, collect_occurrences: bool,
 ) -> PreMergePartial<I>
 where
   I: Copy + Eq + Hash + Ord,
@@ -266,6 +348,7 @@ where
     &words[range.words.clone()],
     range.words.start,
     vocab,
+    frozen_initial_units,
     collect_occurrences,
   )
 }
@@ -545,6 +628,11 @@ where
     C: CharSplit + Clone + Ord,
     I: HasChar<C>,
   {
+    if self.training_state == TrainingState::Poisoned {
+      return Err(MyError::InvalidBpeModel(
+        "trainer state is incomplete after failed BBPE fallback training".to_string(),
+      ));
+    }
     let mut vocab_contents = BTreeSet::new();
     for token in self.vocab.values() {
       let normalized = C::from_vec_u8(&C::to_vec_u8(token));
@@ -556,6 +644,15 @@ where
       }
     }
     drop(vocab_contents);
+
+    for token in self.vocab.values() {
+      if !C::is_valid_model_vocab_word(token) {
+        return Err(MyError::InvalidBpeModel(format!(
+          "Unicode vocabulary token {} must be canonical Unicode content or a homogeneous invalid UTF-8 byte fragment",
+          token.debug_display(),
+        )));
+      }
+    }
 
     let mut target_ids = BTreeSet::new();
     let mut outputs = Vec::with_capacity(self.merges.len());
@@ -576,6 +673,12 @@ where
             expected.debug_display(),
           )));
         }
+        if !C::is_valid_model_merge_word(expected) {
+          return Err(MyError::InvalidBpeModel(format!(
+            "Unicode merge {rank} {side} operand {} is not canonical homogeneous content",
+            expected.debug_display(),
+          )));
+        }
       }
 
       let Some(target) = merge.target else {
@@ -589,7 +692,7 @@ where
         )));
       }
 
-      let output = merge.merged_content();
+      let output = merge.canonical_merged_content();
       let Some(target_content) = self.vocab.get(&target) else {
         return Err(MyError::InvalidBpeModel(format!(
           "merge {rank} target is missing from the vocabulary",
@@ -600,6 +703,20 @@ where
           "merge {rank} target is {}, expected {}",
           target_content.debug_display(),
           output.debug_display(),
+        )));
+      }
+      if !C::is_valid_model_merge_word(target_content) {
+        return Err(MyError::InvalidBpeModel(format!(
+          "Unicode merge {rank} target {} is not canonical homogeneous content",
+          target_content.debug_display(),
+        )));
+      }
+      if !C::is_valid_model_merge(&merge.content.0, &merge.content.1, target_content) {
+        return Err(MyError::InvalidBpeModel(format!(
+          "Unicode merge {rank} target {} is not the canonical byte concatenation of {} and {}",
+          target_content.debug_display(),
+          merge.content.0.debug_display(),
+          merge.content.1.debug_display(),
         )));
       }
       outputs.push(output);
@@ -688,6 +805,51 @@ impl<C, I> BpeTrainer<C, I> {
     self.pre_merges.resident_occurrence_capacity()
   }
 
+  /// Return a capacity-backed breakdown of persistent trainer storage.
+  ///
+  /// The occurrence category is the part constrained by
+  /// [`BpeTrainerConfig::hot_pair_window_size`]. Word inventory and pair-table
+  /// storage remain intentionally global so bounded mode can preserve exact
+  /// frequencies and winner selection.
+  pub fn memory_usage(&self) -> TrainerMemoryUsage {
+    let pair_usage = self.pre_merges.memory_usage();
+    let word_storage_bytes = self.words.capacity() * size_of::<PreToken<C, I>>()
+      + self.words.iter().map(|word| word.idxs.capacity() * size_of::<I>()).sum::<usize>()
+      + unique_word_payload_bytes(self.words.iter().map(|word| &word.src));
+    let vocab_token_bytes = unique_word_payload_bytes(self.vocab.values());
+    let merge_storage_bytes = self.merges.capacity() * size_of::<Merge<C, I>>();
+    let merge_heap_bytes = self.merge_heap.capacity() * size_of::<MergeCandidate<C, I>>();
+    let estimated_persistent_bytes = word_storage_bytes
+      .saturating_add(pair_usage.pair_table_bytes)
+      .saturating_add(pair_usage.occurrence_set_header_bytes)
+      .saturating_add(pair_usage.occurrence_capacity_bytes)
+      .saturating_add(merge_storage_bytes)
+      .saturating_add(merge_heap_bytes)
+      .saturating_add(vocab_token_bytes);
+
+    TrainerMemoryUsage {
+      word_entries: self.words.len(),
+      word_entry_capacity: self.words.capacity(),
+      word_storage_bytes,
+      pair_entries: pair_usage.pair_entries,
+      pair_table_capacity: pair_usage.pair_table_capacity,
+      pair_table_bytes: pair_usage.pair_table_bytes,
+      occurrence_set_slots: pair_usage.occurrence_set_slots,
+      occurrence_set_slot_capacity: pair_usage.occurrence_set_slot_capacity,
+      occurrence_set_header_bytes: pair_usage.occurrence_set_header_bytes,
+      occurrence_capacity_entries: pair_usage.occurrence_capacity_entries,
+      occurrence_capacity_bytes: pair_usage.occurrence_capacity_bytes,
+      merge_heap_entries: self.merge_heap.len(),
+      merge_heap_capacity: self.merge_heap.capacity(),
+      merge_heap_bytes,
+      merge_entries: self.merges.len(),
+      merge_storage_bytes,
+      vocab_entries: self.vocab.len(),
+      vocab_token_bytes,
+      estimated_persistent_bytes,
+    }
+  }
+
   /// Construct an empty trainer with no vocab, merges, or words.
   pub fn empty() -> Self {
     Self {
@@ -699,10 +861,23 @@ impl<C, I> BpeTrainer<C, I> {
       merges: Vec::new(),
       pre_merges: PairStore::new(None),
       merge_heap: BinaryHeap::new(),
+      merge_heap_cutoff: None,
       special_tokens: Vec::new(),
       words: Vec::new(),
+      frozen_initial_units: AHashSet::new(),
+      last_event_freq: None,
+      training_state: TrainingState::Open,
     }
   }
+}
+
+fn unique_word_payload_bytes<'a, C: 'a>(words: impl IntoIterator<Item = &'a Word<C>>) -> usize {
+  let mut seen = HashSet::new();
+  words
+    .into_iter()
+    .filter(|word| seen.insert(Arc::as_ptr(*word) as *const C as usize))
+    .map(|word| word.len() * size_of::<C>())
+    .sum()
 }
 
 impl<C, I: IdxLike> BpeTrainer<C, I>
@@ -722,6 +897,7 @@ where
   fn _build_pre_merges_with_options(&mut self, parallel: bool, chunk_units: usize) {
     debug!("Initializing BPE training with {} words", self.words.len());
     self.merge_heap.clear();
+    self.merge_heap_cutoff = None;
     self.pre_merges.reset(self.config.hot_pair_window_size);
     let collect_occurrences = !self.pre_merges.is_bounded();
     self._build_pre_merges_batched(parallel, chunk_units, collect_occurrences);
@@ -737,6 +913,7 @@ where
     let chunk_units = chunk_units.max(1);
     let words = &self.words;
     let vocab = &self.vocab;
+    let frozen_initial_units = &self.frozen_initial_units;
     let mut reducer = PreMergeReducer::new(vocab, &mut self.pre_merges);
 
     if !parallel {
@@ -745,6 +922,7 @@ where
           words,
           &range,
           vocab,
+          frozen_initial_units,
           collect_occurrences,
         ));
       }
@@ -777,6 +955,7 @@ where
           words,
           range,
           vocab,
+          frozen_initial_units,
           collect_occurrences,
         ))
         .collect::<Vec<_>>();
@@ -801,16 +980,45 @@ where
     if pair.freq <= 0 {
       return;
     }
-    self.merge_heap.push(MergeCandidate::from_pair(tp, pair, self.config.tie_break));
+    let candidate = MergeCandidate::from_pair(tp, pair, self.config.tie_break);
+    if self.pre_merges.is_bounded()
+      && self.merge_heap_cutoff.as_ref().is_some_and(|cutoff| candidate < *cutoff)
+    {
+      return;
+    }
+    self.merge_heap.push(candidate);
   }
 
   fn rebuild_merge_heap(&mut self) {
-    self.merge_heap = self
-      .pre_merges
-      .iter()
-      .filter(|(_, pair)| pair.freq > 0)
-      .map(|(tp, pair)| MergeCandidate::from_pair(*tp, pair, self.config.tie_break))
-      .collect();
+    if !self.pre_merges.is_bounded() {
+      self.merge_heap = self
+        .pre_merges
+        .iter()
+        .filter(|(_, pair)| pair.freq > 0)
+        .map(|(tp, pair)| MergeCandidate::from_pair(*tp, pair, self.config.tie_break))
+        .collect();
+      self.merge_heap_cutoff = None;
+      return;
+    }
+
+    let candidates = self.ranked_top_merge_candidates();
+    self.merge_heap_cutoff = (candidates.len() == self.pre_merges.window_size())
+      .then(|| candidates.last().expect("non-empty top-K candidate frontier").clone());
+    self.merge_heap = candidates.into_iter().collect();
+  }
+
+  fn ranked_top_merge_candidates(&self) -> Vec<MergeCandidate<C, I>> {
+    let limit = self.pre_merges.window_size();
+    let mut top = BinaryHeap::<Reverse<MergeCandidate<C, I>>>::with_capacity(limit.saturating_add(1));
+    for (tp, pair) in self.pre_merges.iter().filter(|(_, pair)| pair.freq > 0) {
+      top.push(Reverse(MergeCandidate::from_pair(*tp, pair, self.config.tie_break)));
+      if top.len() > limit {
+        top.pop();
+      }
+    }
+    let mut candidates = top.into_iter().map(|Reverse(candidate)| candidate).collect::<Vec<_>>();
+    candidates.sort_unstable_by(|left, right| right.cmp(left));
+    candidates
   }
 
   fn ranked_top_pairs(&self) -> Vec<MergeCandidate<C, I>> {
@@ -878,8 +1086,14 @@ where
 
   fn update_pre_merges(
     &mut self, merge: &Merge<C, I>, target_idx: I,
-    changes: AHashMap<(I, I), MergeData>,
+    mut changes: AHashMap<(I, I), MergeData>,
   ) {
+    if !self.frozen_initial_units.is_empty() {
+      changes.retain(|tp, _| {
+        !self.frozen_initial_units.contains(&tp.0)
+          && !self.frozen_initial_units.contains(&tp.1)
+      });
+    }
     let vocab = &self.vocab;
     let changed_tps = self.pre_merges.apply_changes(
       merge.tp,
@@ -903,37 +1117,52 @@ where
   }
 
   fn _get_largest_merge(&mut self) -> Option<Merge<C, I>> {
-    while let Some(candidate) = self.merge_heap.pop() {
-      if candidate.freq <= 0 {
-        continue;
-      }
-      let Some(pair) = self.pre_merges.get(&candidate.tp) else {
-        continue;
-      };
-      if pair.freq != candidate.freq {
-        continue;
-      }
-      if candidate.content.as_ref().is_some_and(|content| pair.content != *content) {
-        continue;
-      }
-      let is_pair = pair.target.is_none();
-      if self.pre_merges.is_bounded()
-        && is_pair
-        && !self.pre_merges.is_resident(&candidate.tp)
-      {
-        self.refill_hot_occurrences(Some(candidate.tp));
+    loop {
+      while let Some(candidate) = self.merge_heap.pop() {
+        if candidate.freq <= 0 {
+          continue;
+        }
+        if !self.frozen_initial_units.is_empty()
+          && (self.frozen_initial_units.contains(&candidate.tp.0)
+            || self.frozen_initial_units.contains(&candidate.tp.1))
+        {
+          continue;
+        }
+        let Some(pair) = self.pre_merges.get(&candidate.tp) else {
+          continue;
+        };
+        if pair.freq != candidate.freq {
+          continue;
+        }
+        if candidate.content.as_ref().is_some_and(|content| pair.content != *content) {
+          continue;
+        }
+        let is_pair = pair.target.is_none();
+        if self.pre_merges.is_bounded()
+          && is_pair
+          && !self.pre_merges.is_resident(&candidate.tp)
+        {
+          self.refill_hot_occurrences(Some(candidate.tp));
+        }
+
+        return self.pre_merges.take_merge(&candidate.tp);
       }
 
-      return self.pre_merges.take_merge(&candidate.tp);
+      if !self.pre_merges.is_bounded() || self.merge_heap_cutoff.is_none() {
+        return None;
+      }
+      self.rebuild_merge_heap();
+      if self.merge_heap.is_empty() {
+        return None;
+      }
     }
-    None
   }
 
   /// Apply one merge operation and return the newly assigned vocab index.
   ///
   /// This is the core training step once a merge candidate has been selected.
   #[hotpath::measure]
-  pub fn _step(&mut self, merge: Merge<C, I>) -> I where C: Clone {
+  fn _step(&mut self, merge: Merge<C, I>) -> I where C: Clone {
     self._step_with_observer(merge, |_, _, _| {})
   }
 
@@ -942,6 +1171,7 @@ where
     C: Clone,
     F: FnOnce(&Self, I, Option<&AHashMap<(I, I), MergeData>>),
   {
+    self.last_event_freq = Some(merge.data.freq);
     let target_idx = self._add_vocab_idx();
     // if target = Some(j), this is a single char token, no need to merge.
     // but we have to add it to vocab.
@@ -974,8 +1204,11 @@ where
   pub fn finish(self) -> MyResult<BpeEncoder<C>>
   where
     C: Ord + Clone + Cachable + CharSplit,
+    I: HasChar<C>,
   {
-    let merges = self.merges
+    let model = self.validate_model()?;
+    let (special_tokens, vocab, model_merges) = model.into_parts();
+    let merges = model_merges
       .into_iter()
       .map(|m| {
         let tp = (m.tp.0.to_u64() as Idx, m.tp.1.to_u64() as Idx);
@@ -983,8 +1216,11 @@ where
         (tp, target)
       })
       .collect();
-    let vocab = self.vocab.into_iter().map(|(i, w)| (i.to_u64() as Idx, w)).collect();
-    BpeEncoder::new(vocab, merges, self.special_tokens)
+    let vocab = vocab
+      .into_iter()
+      .map(|(i, w)| (i.to_u64() as Idx, w))
+      .collect();
+    BpeEncoder::new(vocab, merges, special_tokens)
   }
 
   /// Emit internal metrics about the trainer state.
@@ -994,18 +1230,264 @@ where
     metrics::gauge!("bpe_trainer.words_count").set(self.words.len() as f64);
   }
 
+  fn freeze_unmaterialized_initial_units(&mut self) -> MyResult<Vec<(char, Freq)>>
+  where
+    C: CharToIdx<I>,
+  {
+    let mut inventory = Vec::new();
+    let mut frozen = Vec::new();
+    for (_, pair) in self.pre_merges.iter() {
+      let Some(unit) = pair.target else {
+        continue;
+      };
+      let bytes = C::bbpe_word_to_bytes(&pair.content.1).ok_or_else(bbpe_unit_error)?;
+      let text = std::str::from_utf8(&bytes)?;
+      let mut chars = text.chars();
+      let Some(scalar) = chars.next() else {
+        return Err(MyError::SpecError(format!(
+          "BBPE fallback initial unit must be one Unicode scalar, got {}",
+          pair.content.1.debug_display(),
+        )));
+      };
+      if chars.next().is_some() {
+        return Err(MyError::SpecError(format!(
+          "BBPE fallback initial unit must be one Unicode scalar, got {}",
+          pair.content.1.debug_display(),
+        )));
+      }
+      frozen.push(unit);
+      inventory.push((scalar, pair.freq));
+    }
+    frozen.sort_unstable();
+    inventory.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    self.frozen_initial_units.extend(frozen);
+    Ok(inventory)
+  }
+
+  fn train_bbpe_fallback(
+    &mut self, max_merges: usize, cutoff_freq: Option<Freq>,
+  ) -> MyResult<Vec<Merge<u8, Idx>>>
+  where
+    C: CharToIdx<I>,
+  {
+    let inventory = self
+      .freeze_unmaterialized_initial_units()?
+      .into_iter()
+      .map(|(scalar, freq)| (scalar.to_string(), freq))
+      .collect::<Vec<_>>();
+    let config = BpeTrainerConfig {
+      initial_alphabet: self.config.initial_alphabet,
+      tie_break: self.config.tie_break,
+      parallel_merge_min_occurs_in: self.config.parallel_merge_min_occurs_in,
+      // The fallback inventory contains at most one short pseudo-word per
+      // Unicode scalar, so an exact occurrence map is both smaller and avoids
+      // hydration scans.
+      hot_pair_window_size: None,
+      bigram_cutoff_freq: None,
+    };
+    let mut fallback = BpeTrainer::<u8, Idx>::from_words_with_config(
+      inventory.iter().map(|(word, freq)| (word.as_str(), *freq)),
+      &[],
+      config,
+    );
+    fallback._build_pre_merges();
+    while fallback.merges.len() < max_merges {
+      let Some(merge) = fallback._get_largest_merge() else {
+        break;
+      };
+      if cutoff_freq.is_some_and(|cutoff| merge.data.freq < cutoff) {
+        break;
+      }
+      fallback._step(merge);
+    }
+    Ok(fallback.merges)
+  }
+
+  fn compose_bbpe_fallback(
+    &mut self, fallback: Vec<Merge<u8, Idx>>,
+  ) -> MyResult<()>
+  where
+    C: CharToIdx<I>,
+  {
+    if fallback.is_empty() {
+      return Ok(());
+    }
+
+    let mut vocab_by_content = BTreeMap::new();
+    for (idx, token) in &self.vocab {
+      let bytes = C::bbpe_word_to_bytes(token).ok_or_else(bbpe_unit_error)?;
+      let token = C::bbpe_word_from_bytes(&bytes).ok_or_else(bbpe_unit_error)?;
+      if vocab_by_content.insert(token.clone(), *idx).is_some() {
+        return Err(MyError::InvalidBpeModel(format!(
+          "duplicate canonical vocabulary token {} before BBPE composition",
+          token.debug_display(),
+        )));
+      }
+    }
+
+    let mut converted = Vec::with_capacity(fallback.len());
+    for merge in fallback {
+      let left = C::bbpe_word_from_bytes(merge.content.0.as_ref())
+        .ok_or_else(bbpe_unit_error)?;
+      let right = C::bbpe_word_from_bytes(merge.content.1.as_ref())
+        .ok_or_else(bbpe_unit_error)?;
+      let Some(left_idx) = vocab_by_content.get(&left).copied() else {
+        return Err(MyError::InvalidBpeModel(format!(
+          "BBPE left dependency {} is missing from the Unicode vocabulary",
+          left.debug_display(),
+        )));
+      };
+      let Some(right_idx) = vocab_by_content.get(&right).copied() else {
+        return Err(MyError::InvalidBpeModel(format!(
+          "BBPE right dependency {} is missing from the Unicode vocabulary",
+          right.debug_display(),
+        )));
+      };
+      let mut target_bytes = C::bbpe_word_to_bytes(&left).ok_or_else(bbpe_unit_error)?;
+      target_bytes.extend(C::bbpe_word_to_bytes(&right).ok_or_else(bbpe_unit_error)?);
+      let target_content = C::bbpe_word_from_bytes(&target_bytes)
+        .ok_or_else(bbpe_unit_error)?;
+      if vocab_by_content.contains_key(&target_content) {
+        return Err(MyError::InvalidBpeModel(format!(
+          "BBPE merge would duplicate vocabulary token {}",
+          target_content.debug_display(),
+        )));
+      }
+      let target = self._add_vocab_idx();
+      self.vocab.insert(target, target_content.clone());
+      vocab_by_content.insert(target_content, target);
+
+      let mut converted_merge = Merge::new((left_idx, right_idx), (left, right))
+        .with_target(target);
+      converted_merge.data.freq = merge.data.freq;
+      converted.push(converted_merge);
+    }
+
+    let mut primary = std::mem::take(&mut self.merges).into_iter().peekable();
+    let mut fallback = converted.into_iter().peekable();
+    while primary.peek().is_some() || fallback.peek().is_some() {
+      // Preserve each stream's dependency order. On an equal frequency, keep
+      // the existing primary rank first; the two domains cannot overlap.
+      let take_primary = match (primary.peek(), fallback.peek()) {
+        (Some(primary), Some(fallback)) => primary.data.freq >= fallback.data.freq,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => unreachable!(),
+      };
+      if take_primary {
+        self.merges.push(primary.next().unwrap());
+      } else {
+        self.merges.push(fallback.next().unwrap());
+      }
+    }
+    Ok(())
+  }
+
+  fn ensure_training_open(&self) -> MyResult<()> {
+    match self.training_state {
+      TrainingState::Open => Ok(()),
+      TrainingState::BbpeFinalized { vocab_size } => Err(MyError::SpecError(format!(
+        "BBPE fallback training is finalized at vocabulary size {vocab_size}; create a new trainer to continue training",
+      ))),
+      TrainingState::Poisoned => Err(MyError::SpecError(
+        "trainer cannot continue after failed BBPE fallback training".to_string(),
+      )),
+    }
+  }
+
+  fn train_until_with_bbpe_fallback_impl(
+    &mut self, vocab_size: usize, primary_vocab_ratio: f64,
+  ) -> MyResult<()>
+  where
+    C: CharToIdx<I> + Clone,
+  {
+    if !primary_vocab_ratio.is_finite() || !(0.0..=1.0).contains(&primary_vocab_ratio) {
+      return Err(MyError::SpecError(
+        "primary_vocab_ratio must be finite and between 0 and 1".to_string(),
+      ));
+    }
+    self.ensure_training_open()?;
+    let base_vocab_size = self.special_tokens.len() + 256;
+    if vocab_size <= base_vocab_size && self.vocab.len() == base_vocab_size {
+      return Ok(());
+    }
+    if primary_vocab_ratio == 1.0 {
+      return self.train_until(vocab_size);
+    }
+
+    if self.vocab.len() != base_vocab_size {
+      return Err(MyError::SpecError(
+        "BBPE fallback training must start before ordinary vocabulary growth".to_string(),
+      ));
+    }
+
+    let learned_slots = vocab_size.saturating_sub(base_vocab_size);
+    let primary_slots = ((learned_slots as f64) * primary_vocab_ratio).floor() as usize;
+    let fallback_cap = learned_slots - primary_slots;
+    let primary_target = base_vocab_size + primary_slots;
+    let result = (|| {
+      self.train_until(primary_target)?;
+      if primary_slots > 0
+        && self.vocab.len() < primary_target
+        && self.config.bigram_cutoff_freq.is_none()
+      {
+        return Err(MyError::TrainStep);
+      }
+      if primary_slots == 0 {
+        // `train_until` is intentionally a no-op when the target is already
+        // reached, but fallback still needs the initial-unit inventory.
+        self._build_pre_merges();
+      }
+      let fallback_cutoff_freq = match (self.last_event_freq, self.config.bigram_cutoff_freq) {
+        (Some(primary), Some(configured)) => Some(primary.max(configured)),
+        (primary, configured) => primary.or(configured),
+      };
+      let fallback = self.train_bbpe_fallback(fallback_cap, fallback_cutoff_freq)?;
+      let fallback_merges = fallback.len();
+      let primary_resume_target = vocab_size.saturating_sub(fallback_merges);
+
+      // If fallback underfills, rebuild after freezing so current, dynamically
+      // created, and hydrated pairs all observe the same hard boundaries.
+      if primary_resume_target > self.vocab.len() {
+        let previous_hot_stats = self.pre_merges.stats().cloned();
+        self.train_until(primary_resume_target)?;
+        if let Some(previous_hot_stats) = previous_hot_stats {
+          self.pre_merges.accumulate_stats(previous_hot_stats);
+        }
+      }
+      self.compose_bbpe_fallback(fallback)
+    })();
+
+    match result {
+      Ok(()) => {
+        self.training_state = TrainingState::BbpeFinalized {
+          vocab_size: self.vocab.len(),
+        };
+        Ok(())
+      }
+      Err(error) => {
+        self.training_state = TrainingState::Poisoned;
+        Err(error)
+      }
+    }
+  }
+
   /// Train until the vocabulary reaches `vocab_size` or the next pair merge
   /// falls below the configured cutoff.
   #[hotpath::measure]
   pub fn train_until(&mut self, vocab_size: usize) -> MyResult<()>
   where
-    C: Clone,
+    C: CharToIdx<I> + Clone,
   {
+    self.ensure_training_open()?;
     if vocab_size < self.vocab.len() {
       return Err(MyError::TargetVocabTooSmall {
         requested: vocab_size,
         current: self.vocab.len(),
       });
+    }
+    if vocab_size == self.vocab.len() {
+      return Ok(());
     }
     self._build_pre_merges();
     self._metrics();
@@ -1031,6 +1513,25 @@ where
   }
 }
 
+impl BpeTrainer<Character, CharIdx> {
+  /// Train a Unicode model to `vocab_size` with byte-BPE fallback for Unicode
+  /// scalars omitted at the primary allocation boundary.
+  ///
+  /// `primary_vocab_ratio` applies only to learned slots after special tokens
+  /// and the mandatory 256-byte alphabet. A ratio below `1.0` must be used
+  /// before ordinary vocabulary growth and finalizes the trainer after a
+  /// fallback pass. A ratio of `1.0` delegates to ordinary, extendable
+  /// training; a target at or below the base vocabulary is a no-op. The
+  /// configured pair-frequency cutoff may leave the final vocabulary below
+  /// `vocab_size`.
+  #[hotpath::measure]
+  pub fn train_until_with_bbpe_fallback(
+    &mut self, vocab_size: usize, primary_vocab_ratio: f64,
+  ) -> MyResult<()> {
+    self.train_until_with_bbpe_fallback_impl(vocab_size, primary_vocab_ratio)
+  }
+}
+
 impl<C, I> Train for BpeTrainer<C, I>
 where
   Self: CanTrain<C, I>,
@@ -1050,6 +1551,9 @@ where
   }
 
   fn init_training(&mut self) {
+    if self.ensure_training_open().is_err() {
+      return;
+    }
     self._build_pre_merges();
     self._metrics();
   }
@@ -1060,6 +1564,7 @@ where
 
   #[hotpath::measure]
   fn step(&mut self) -> MyResult<()> {
+    self.ensure_training_open()?;
     // Find the most frequent merge. Hugging Face's BPE trainer resolves equal
     // frequencies by choosing the smallest pair ids, so keep that ordering here.
     let merge = self._get_largest_merge();
@@ -1079,7 +1584,7 @@ where
 
 #[cfg(test)]
 mod tests {
-  use crate::{pretokenizer::DEFAULT_EOT, spec::gpt2::Gpt2Spec};
+  use crate::{pretokenizer::DEFAULT_EOT, spec::gpt2::Gpt2Spec, traits::Encode};
 
   use super::*;
 
@@ -1582,6 +2087,30 @@ mod tests {
   }
 
   #[test]
+  fn test_memory_usage_attributes_hot_window_to_occurrence_postings() {
+    let words = [("ab", 10), ("bc", 10), ("cd", 10), ("de", 10)];
+    let mut exact = BpeTrainer::<u8, Idx>::from_words(words, &[]);
+    let mut bounded = BpeTrainer::<u8, Idx>::from_words_with_config(
+      words,
+      &[],
+      BpeTrainerConfig {
+        hot_pair_window_size: Some(1),
+        ..BpeTrainerConfig::default()
+      },
+    );
+    exact.init_training();
+    bounded.init_training();
+
+    let exact_usage = exact.memory_usage();
+    let bounded_usage = bounded.memory_usage();
+    assert_eq!(exact_usage.word_storage_bytes, bounded_usage.word_storage_bytes);
+    assert_eq!(exact_usage.pair_entries, bounded_usage.pair_entries);
+    assert_eq!(exact_usage.pair_table_bytes, bounded_usage.pair_table_bytes);
+    assert!(exact_usage.occurrence_capacity_bytes > bounded_usage.occurrence_capacity_bytes);
+    assert!(exact_usage.estimated_persistent_bytes > bounded_usage.estimated_persistent_bytes);
+  }
+
+  #[test]
   fn test_hot_pair_window_batch_prunes_to_exact_limit() {
     let mut trainer = BpeTrainer::<u8, Idx>::from_words_with_config(
       [("abcdef", 1)],
@@ -1980,6 +2509,278 @@ mod tests {
     assert_eq!(model.last_merge_freq(), Some(7));
   }
 
+  #[test]
+  fn test_unicode_bbpe_fallback_composes_after_primary_training() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words_with_config(
+      [
+        ("你好你好你好你好", 70),
+        ("仔", 50),
+        ("他", 50),
+        ("仗", 50),
+        ("付", 50),
+        ("仙", 50),
+        ("们", 50),
+      ],
+      &[],
+      BpeTrainerConfig::default(),
+    );
+
+    bpe.train_until_with_bbpe_fallback(262, 0.5).unwrap();
+
+    assert_eq!(bpe.vocab.len(), 262);
+    assert_eq!(bpe.merges.len(), 4);
+    assert_eq!(
+      bpe.merges.iter().map(|merge| merge.data.freq).collect::<Vec<_>>()[..2],
+      [300, 280],
+    );
+    assert!(bpe.merges.windows(2).all(|merges| {
+      merges[0].data.freq >= merges[1].data.freq
+    }));
+    assert!(bpe.vocab.values().any(|token| {
+      token.as_ref() == [Character::Byte(0xe4), Character::Byte(0xbb)]
+    }));
+    for residual in ['仔', '他', '仗', '付', '仙', '们'] {
+      assert!(!bpe.vocab.values().any(|token| {
+        token.as_ref() == [Character::Unicode(residual)]
+      }));
+    }
+
+    bpe.validate_model().unwrap();
+    let encoder = bpe.finish().unwrap();
+    assert_eq!(encoder.encode_word("你").unwrap().len(), 1);
+    assert_eq!(encoder.encode_word("他").unwrap().len(), 2);
+    let adjacent = encoder.encode_word("仔他").unwrap();
+    assert_eq!(adjacent.len(), 4);
+    assert_eq!(encoder.encode_words(&["仔他"]).unwrap()[0], adjacent);
+    assert_eq!(encoder.encode_string("仔他").unwrap(), adjacent.as_ref());
+    assert_eq!(encoder.decode(adjacent.as_ref()).unwrap(), "仔他");
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_underfill_returns_slots_before_composition() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words_with_config(
+      [("aaaa", 100), ("é", 1)],
+      &[],
+      BpeTrainerConfig::default(),
+    );
+
+    bpe.train_until_with_bbpe_fallback(259, 0.0).unwrap();
+
+    assert_eq!(bpe.vocab.len(), 259);
+    assert_eq!(
+      bpe.merges.iter().map(|merge| merge.data.freq).collect::<Vec<_>>(),
+      [300, 100, 1],
+    );
+    assert!(bpe.merges.windows(2).all(|merges| {
+      merges[0].data.freq >= merges[1].data.freq
+    }));
+    bpe.validate_model().unwrap();
+    let encoder = bpe.finish().unwrap();
+    assert_eq!(encoder.encode_word("aaaa").unwrap().len(), 1);
+    assert_eq!(encoder.encode_word("é").unwrap().len(), 1);
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_matches_bounded_hot_window() {
+    fn train(hot_pair_window_size: Option<usize>) -> BpeModel<Character, CharIdx> {
+      let mut bpe = BpeTrainer::<Character, CharIdx>::from_words_with_config(
+        [
+          ("你好你好你好你好", 70),
+          ("仔", 50),
+          ("他", 50),
+          ("仗", 50),
+          ("付", 50),
+          ("仙", 50),
+          ("们", 50),
+        ],
+        &[],
+        BpeTrainerConfig {
+          hot_pair_window_size,
+          ..BpeTrainerConfig::default()
+        },
+      );
+      bpe.train_until_with_bbpe_fallback(262, 0.5).unwrap();
+      if hot_pair_window_size.is_some() {
+        assert!(bpe.hot_pair_window_stats().unwrap().hydration_scans >= 2);
+      }
+      bpe.validate_model().unwrap()
+    }
+
+    let exact = train(None);
+    let bounded = train(Some(2));
+
+    assert_eq!(exact.vocab(), bounded.vocab());
+    assert_eq!(
+      exact.merges().iter().map(|merge| {
+        (merge.tp, merge.target, merge.content.clone(), merge.data.freq)
+      }).collect::<Vec<_>>(),
+      bounded.merges().iter().map(|merge| {
+        (merge.tp, merge.target, merge.content.clone(), merge.data.freq)
+      }).collect::<Vec<_>>(),
+    );
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_accepts_cutoff_equality() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words_with_config(
+      [("你好", 10)],
+      &[],
+      BpeTrainerConfig {
+        bigram_cutoff_freq: Some(10),
+        ..BpeTrainerConfig::default()
+      },
+    );
+
+    bpe.train_until_with_bbpe_fallback(258, 0.5).unwrap();
+
+    assert_eq!(bpe.vocab.len(), 258);
+    assert_eq!(bpe.merges.len(), 1);
+    assert_eq!(bpe.merges[0].data.freq, 10);
+    assert_eq!(bpe.validate_model().unwrap().last_merge_freq(), Some(10));
+  }
+
+  #[test]
+  fn test_unicode_ordinary_training_remains_incremental() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(
+      [("你好", 10)],
+      &[],
+    );
+
+    bpe.init_training();
+    assert_ne!(bpe.pre_merges.len(), 0);
+    bpe.step().unwrap();
+    bpe.train_until(258).unwrap();
+
+    assert_eq!(bpe.vocab.len(), 258);
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_is_terminal() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(
+      [("你好", 10)],
+      &[],
+    );
+
+    bpe.train_until_with_bbpe_fallback(258, 0.5).unwrap();
+    bpe.validate_model().unwrap();
+
+    for error in [
+      bpe.step().unwrap_err(),
+      bpe.train_until(259).unwrap_err(),
+      bpe.train_until_with_bbpe_fallback(258, 0.5).unwrap_err(),
+    ] {
+      assert!(error.to_string().contains("create a new trainer"));
+    }
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_must_precede_ordinary_vocab_growth() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(
+      [("你好", 10)],
+      &[],
+    );
+
+    bpe.train_until(257).unwrap();
+    let error = bpe.train_until_with_bbpe_fallback(258, 0.5).unwrap_err();
+
+    assert!(error.to_string().contains("before ordinary vocabulary growth"));
+    bpe.train_until(258).unwrap();
+
+    let mut pair_trained = BpeTrainer::<Character, CharIdx>::from_words(
+      [("aa", 10)],
+      &[],
+    );
+    pair_trained.train_until(257).unwrap();
+    assert_eq!(pair_trained.merges.len(), 1);
+    let error = pair_trained
+      .train_until_with_bbpe_fallback(258, 0.5)
+      .unwrap_err();
+    assert!(error.to_string().contains("before ordinary vocabulary growth"));
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_base_target_is_a_no_op() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(
+      [("你好", 10)],
+      &[],
+    );
+
+    bpe.init_training();
+    bpe.train_until_with_bbpe_fallback(256, 0.5).unwrap();
+    bpe.train_until_with_bbpe_fallback(258, 0.0).unwrap();
+
+    assert_eq!(bpe.vocab.len(), 258);
+    assert!(['你', '好'].into_iter().all(|scalar| {
+      !bpe.vocab.values().any(|token| {
+        token.as_ref() == [Character::Unicode(scalar)]
+      })
+    }));
+    assert!(bpe.vocab.values().any(|token| {
+      token.len() > 1 && token.iter().all(|unit| matches!(unit, Character::Byte(_)))
+    }));
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_ratio_one_delegates_to_ordinary_training() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(
+      [("你好", 10)],
+      &[],
+    );
+
+    bpe.train_until_with_bbpe_fallback(257, 1.0).unwrap();
+    bpe.train_until(258).unwrap();
+
+    assert_eq!(bpe.vocab.len(), 258);
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_validates_ratio_without_poisoning() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(
+      [("你好", 10)],
+      &[],
+    );
+
+    for ratio in [f64::NAN, -0.1, 1.1] {
+      let error = bpe.train_until_with_bbpe_fallback(258, ratio).unwrap_err();
+      assert!(error.to_string().contains("finite and between 0 and 1"));
+    }
+    bpe.train_until(257).unwrap();
+  }
+
+  #[test]
+  fn test_unicode_bbpe_fallback_reports_cutoff_underfill_at_actual_size() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words_with_config(
+      [("你好", 6)],
+      &[],
+      BpeTrainerConfig {
+        bigram_cutoff_freq: Some(7),
+        ..BpeTrainerConfig::default()
+      },
+    );
+
+    bpe.train_until_with_bbpe_fallback(260, 0.5).unwrap();
+
+    assert_eq!(bpe.vocab.len(), 258);
+    let error = bpe.train_until(260).unwrap_err();
+    assert!(error.to_string().contains("finalized at vocabulary size 258"));
+    bpe.validate_model().unwrap();
+  }
+
+  #[test]
+  fn test_failed_unicode_bbpe_fallback_poisons_mutated_trainer() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::from_words(
+      std::iter::empty::<(&str, Freq)>(),
+      &[],
+    );
+
+    assert!(matches!(
+      bpe.train_until_with_bbpe_fallback(258, 0.5),
+      Err(MyError::TrainStep),
+    ));
+    assert!(bpe.step().unwrap_err().to_string().contains("failed BBPE"));
+    assert!(bpe.validate_model().unwrap_err().to_string().contains("failed BBPE"));
+  }
+
   fn byte_pair_trainer(freq: Freq, cutoff: Freq) -> BpeTrainer<u8, Idx> {
     BpeTrainer::from_words_with_config(
       [("ab", freq)],
@@ -2170,6 +2971,39 @@ mod tests {
 
     assert!(matches!(error, MyError::InvalidBpeModel(_)));
     assert!(error.to_string().contains("duplicate vocabulary token"));
+  }
+
+  #[test]
+  fn test_validation_rejects_mixed_unicode_fallback_token() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::new(vec![], vec![]);
+    let mixed = vec![Character::Byte(0x80), Character::Unicode('a')].to_word();
+    bpe.vocab.insert(CharIdx::Idx(256), mixed);
+
+    let error = bpe.validate_model().unwrap_err();
+
+    assert!(matches!(error, MyError::InvalidBpeModel(_)));
+    assert!(error.to_string().contains("canonical Unicode content"));
+  }
+
+  #[test]
+  fn test_validation_accepts_unicode_fallback_byte_merge() {
+    let mut bpe = BpeTrainer::<Character, CharIdx>::new(vec![], vec![]);
+    let left = vec![Character::Byte(0xc3)].to_word();
+    let right = vec![Character::Byte(0xa9)].to_word();
+    let target: Word<Character> = "é".to_word();
+    let left_idx = *bpe.byte_vocab.get(&0xc3).unwrap();
+    let right_idx = *bpe.byte_vocab.get(&0xa9).unwrap();
+    let target_idx = CharIdx::Idx(256);
+    bpe.vocab.insert(target_idx, target);
+    bpe.merges = vec![Merge::new((left_idx, right_idx), (left, right)).with_target(target_idx)];
+
+    let model = bpe.validate_model().unwrap();
+
+    assert_eq!(model.merges().len(), 1);
+    assert_eq!(
+      model.vocab().get(&target_idx).unwrap().as_ref(),
+      [Character::Unicode('é')],
+    );
   }
 
   #[test]

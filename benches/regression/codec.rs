@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use unitoken::{
   bpe::{BpeEncoder, Character, Idx, encoder::BpeBuilder},
-  pretokenizer::{UnicodeBigramMixedBoundary, parse_unicode_bigrams},
+  pretokenizer::{PreTokenizer, UnicodeBigramMixedBoundary, parse_unicode_bigrams},
   spec::{gpt2::Gpt2Spec, unitoken::UnitokenSpec},
   traits::{CanEncode, Encode},
 };
@@ -32,6 +32,11 @@ use crate::common::{
 
 pub const CONTRACT: &str = "unitoken_codec_regression_v1";
 pub const SCHEMA_VERSION: u32 = 1;
+pub(crate) const DEFAULT_CHUNKS: usize = 1024;
+
+fn default_split_on_vocab_bigrams() -> bool {
+  true
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -74,11 +79,14 @@ pub struct Args {
   #[arg(long)]
   pub name: Option<String>,
   /// Requested parallel file chunks; aligned boundaries may deduplicate.
-  #[arg(long, default_value_t = 1024)]
+  #[arg(long, default_value_t = DEFAULT_CHUNKS)]
   pub chunks: usize,
   /// Custom pretokenizer regex. Defaults to the library pattern.
   #[arg(long)]
   pub pat_str: Option<String>,
+  /// Partition PAT words using bigrams derived from the model vocabulary.
+  #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+  pub split_on_vocab_bigrams: bool,
   /// JSON array of selected Unicode bigram strings required by a premerged model.
   #[arg(long)]
   pub unicode_bigrams: Option<PathBuf>,
@@ -115,6 +123,8 @@ pub struct CodecCaseConfig {
   pub format: ModelFormat,
   pub requested_chunks: usize,
   pub pat_str: Option<String>,
+  #[serde(default = "default_split_on_vocab_bigrams")]
+  pub split_on_vocab_bigrams: bool,
   pub unicode_bigrams_path: Option<PathBuf>,
   pub unicode_bigram_mixed_boundary: UnicodeBigramMixedBoundaryName,
   pub special_tokens: Vec<String>,
@@ -127,7 +137,7 @@ pub struct CodecCaseConfig {
 }
 
 impl CodecCaseConfig {
-  fn validate(&self) -> Result<(), String> {
+  pub(crate) fn validate(&self) -> Result<(), String> {
     if self.name.trim().is_empty() {
       return Err("case name cannot be empty".to_string());
     }
@@ -146,6 +156,12 @@ impl CodecCaseConfig {
     if self.special_tokens.iter().collect::<BTreeSet<_>>().len() != self.special_tokens.len() {
       return Err("special tokens cannot contain duplicates".to_string());
     }
+    PreTokenizer::try_new(
+      &self.special_tokens,
+      self.special_tokens.first().map(String::as_str),
+      self.pat_str.as_deref(),
+    )
+    .map_err(|error| format!("invalid pretokenizer configuration: {error}"))?;
     match (self.format, self.unit) {
       (ModelFormat::Gpt2, Unit::Byte)
       | (ModelFormat::Unitoken, Unit::Byte | Unit::Unicode) => {}
@@ -236,6 +252,8 @@ pub struct CodecModelReport {
   pub unicode_bigrams_semantic_sha256: Option<String>,
   pub unicode_bigram_count: Option<usize>,
   pub unicode_bigram_mixed_boundary: UnicodeBigramMixedBoundaryName,
+  #[serde(default = "default_split_on_vocab_bigrams")]
+  pub split_on_vocab_bigrams: bool,
   pub resolved_pat_str: String,
   pub end_of_text: String,
   pub encoder_config_sha256: String,
@@ -361,7 +379,6 @@ pub struct CodecSuiteReport {
 }
 
 pub fn run(args: Args) -> Result<(), String> {
-  let environment = environment_report();
   let repeats = args.repeats;
   if repeats == 0 {
     return Err("--repeats must be positive".to_string());
@@ -382,6 +399,7 @@ pub fn run(args: Args) -> Result<(), String> {
     format: args.format,
     requested_chunks: args.chunks,
     pat_str: args.pat_str,
+    split_on_vocab_bigrams: args.split_on_vocab_bigrams,
     unicode_bigrams_path: args.unicode_bigrams,
     unicode_bigram_mixed_boundary: args.unicode_bigram_mixed_boundary,
     special_tokens,
@@ -392,8 +410,20 @@ pub fn run(args: Args) -> Result<(), String> {
     expected_token_count: args.expected_token_count,
     expected_token_sha256: args.expected_token_sha256,
   };
+  run_config(config, repeats, args.output)
+}
+
+pub(crate) fn run_config(
+  config: CodecCaseConfig,
+  repeats: usize,
+  output: Option<PathBuf>,
+) -> Result<(), String> {
+  let environment = environment_report();
+  if repeats == 0 {
+    return Err("repeats must be positive".to_string());
+  }
   config.validate()?;
-  if let Some(report_output) = args.output.as_deref() {
+  if let Some(report_output) = output.as_deref() {
     validate_codec_output_path(report_output, &config)?;
   }
   let artifact_dir = TemporaryDirectory::create("unitoken-codec")?;
@@ -426,16 +456,14 @@ pub fn run(args: Args) -> Result<(), String> {
   let report = CodecSuiteReport {
     schema_version: SCHEMA_VERSION,
     contract: CONTRACT.to_string(),
-    suite_name: name.clone(),
+    suite_name: config.name.clone(),
     generated_at_unix_seconds: now_seconds(),
     environment,
     config,
     samples,
     gates,
   };
-  let output = args
-    .output
-    .unwrap_or_else(|| default_suite_report_path(&report_name, &report.environment));
+  let output = output.unwrap_or_else(|| default_suite_report_path(&report_name, &report.environment));
   validate_codec_output_path(&output, &report.config)?;
   write_json_atomic(&output, &report)?;
   print_summary(&output, &report);
@@ -519,7 +547,8 @@ fn load_byte_encoder(config: &CodecCaseConfig) -> Result<(BpeEncoder<u8>, u64, O
     })
     .map_err(|error| ("model_load", error.to_string()))?
     .set_special_tokens(Some(config.special_tokens.clone()))
-    .set_pat_str(config.pat_str.clone());
+    .set_pat_str(config.pat_str.clone())
+    .set_split_on_vocab_bigrams(config.split_on_vocab_bigrams);
   let encoder = match config.format {
     ModelFormat::Gpt2 => builder.build(&Gpt2Spec),
     ModelFormat::Unitoken => builder.build(&UnitokenSpec),
@@ -536,6 +565,7 @@ fn load_unicode_encoder(config: &CodecCaseConfig) -> Result<(BpeEncoder<Characte
     .map_err(|error| ("model_load", error.to_string()))?
     .set_special_tokens(Some(config.special_tokens.clone()))
     .set_pat_str(config.pat_str.clone())
+    .set_split_on_vocab_bigrams(config.split_on_vocab_bigrams)
     .build(&UnitokenSpec)
     .map_err(|error| ("model_build", error.to_string()))?;
   let mixed_boundary = match config.unicode_bigram_mixed_boundary {
@@ -598,6 +628,7 @@ fn build_model_report<C>(
   update_hash_option(&mut digest, unicode_bigrams_semantic_sha256.as_deref());
   update_hash_bytes(&mut digest, resolved_pat_str.as_bytes());
   update_hash_bytes(&mut digest, end_of_text.as_bytes());
+  digest.update([u8::from(config.split_on_vocab_bigrams)]);
   update_hash_bytes(
     &mut digest,
     unicode_bigram_mixed_boundary.as_str().as_bytes(),
@@ -623,6 +654,7 @@ fn build_model_report<C>(
     unicode_bigrams_semantic_sha256,
     unicode_bigram_count,
     unicode_bigram_mixed_boundary,
+    split_on_vocab_bigrams: config.split_on_vocab_bigrams,
     resolved_pat_str,
     end_of_text,
     encoder_config_sha256,
@@ -1070,12 +1102,13 @@ fn print_summary(path: &Path, report: &CodecSuiteReport) {
   for sample in &report.samples {
     if let (Some(encode), Some(decode)) = (&sample.encode, &sample.decode) {
       println!(
-        "  {} input={:.1} MiB tokens={} vocab={} merges={} model={}",
+        "  {} input={:.1} MiB tokens={} vocab={} merges={} split_on_vocab_bigrams={} model={}",
         sample.case_id,
         encode.input.text_bytes as f64 / 1024.0 / 1024.0,
         encode.token_count,
         encode.model.vocab_size,
         encode.model.merge_count,
+        encode.model.split_on_vocab_bigrams,
         short_hash(&encode.model.encoder_config_sha256),
       );
       println!(
