@@ -25,6 +25,7 @@ jobs:
           package="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
           status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
             "https://crates.io/api/v1/crates/${package}/${version}")"
           case "$status" in
             200)
