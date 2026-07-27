@@ -1,9 +1,9 @@
 [package]
 name = "unitoken"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
-description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
-repository = "https://github.com/tokn-ai/unitoken"
+description = "Deprecated: use ffbpe for Unicode-aware, streaming BPE training and encoding"
+repository = "https://github.com/tokn-ai/ffbpe"
 readme = "README.md"
 license = "MIT"
 keywords = ["tokenizer", "bpe", "nlp"]

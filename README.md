@@ -1,9 +1,19 @@
-# unitoken
+# unitoken (deprecated)
 
-[![CI](https://github.com/tokn-ai/unitoken/actions/workflows/ci.yml/badge.svg)](https://github.com/tokn-ai/unitoken/actions/workflows/ci.yml)
+[![CI](https://github.com/tokn-ai/ffbpe/actions/workflows/ci.yml/badge.svg)](https://github.com/tokn-ai/ffbpe/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/uni-tokenizer.svg)](https://pypi.org/project/uni-tokenizer/)
 [![crates.io](https://img.shields.io/crates/v/unitoken.svg)](https://crates.io/crates/unitoken)
 [![docs.rs](https://docs.rs/unitoken/badge.svg)](https://docs.rs/unitoken)
+
+> [!WARNING]
+> **unitoken has moved to [FFBPE](https://github.com/tokn-ai/ffbpe).**
+>
+> Python users should install `ffbpe` and replace `import uni_tokenizer` with
+> `import ffbpe`. Rust users should replace the `unitoken` dependency and imports
+> with `ffbpe`.
+>
+> Version 0.1.7 remains fully functional for migration, but unitoken will receive
+> no further updates.
 
 **unitoken is a Rust-powered BPE toolkit for large, multilingual corpora.**
 It combines Unicode-aware inventory shaping, frequency-safe merge cutoffs,

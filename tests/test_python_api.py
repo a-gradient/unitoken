@@ -1,12 +1,19 @@
-from pathlib import Path
+import importlib
 import json
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
+import uni_tokenizer
 
 from uni_tokenizer import BpeEncoder, BpeModel, BpeTrainer, PreTokenizer, train_bpe
 from uni_tokenizer._lib import BpeTrainer_Character_CharIdx
+
+
+def test_import_warns_about_ffbpe_migration() -> None:
+  with pytest.warns(FutureWarning, match="pip install ffbpe"):
+    importlib.reload(uni_tokenizer)
 
 
 def test_pretokenizer_uses_pat_str_and_returns_words() -> None:

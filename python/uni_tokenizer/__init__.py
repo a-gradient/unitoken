@@ -1,3 +1,13 @@
+import warnings
+
+warnings.warn(
+  "uni-tokenizer has moved to ffbpe and is no longer maintained. "
+  "Install it with `pip install ffbpe` and import from `ffbpe`. "
+  "The unitoken 0.1.7 APIs remain functional for migration.",
+  FutureWarning,
+  stacklevel=2,
+)
+
 from .trainer import BpeTrainer, FileFormat, Unit
 from .model import BpeModel
 from .training import train_bpe

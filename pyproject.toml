@@ -1,16 +1,20 @@
 [project]
 name = "uni-tokenizer"
-version = "0.1.6"
-description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
+version = "0.1.7"
+description = "Deprecated: use ffbpe for Unicode-aware, streaming BPE training and encoding"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
 ]
+classifiers = [
+  "Development Status :: 7 - Inactive",
+]
 
 [project.urls]
-Repository = "https://github.com/tokn-ai/unitoken"
-Issues = "https://github.com/tokn-ai/unitoken/issues"
+FFBPE = "https://github.com/tokn-ai/ffbpe"
+Repository = "https://github.com/tokn-ai/ffbpe"
+Issues = "https://github.com/tokn-ai/ffbpe/issues"
 
 [dependency-groups]
 dev = [
