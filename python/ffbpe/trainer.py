@@ -38,15 +38,17 @@ class BpeTrainer:
   Parameters
   ----------
   special_tokens:
-    Sequence of tokens reserved in the vocabulary.
+      Sequence of tokens reserved in the vocabulary.
   unit:
-    Primary segmentation unit. Unicode models may include UTF-8 byte fallback merges.
+      Primary segmentation unit. Unicode models may include UTF-8 byte fallback
+      merges.
   hot_pair_window_size:
-    If set, retain occurrence postings for an exact top-K candidate window.
-    Smaller values reduce memory but may require additional inventory scans.
+      If set, retain occurrence postings for an exact top-K candidate window.
+      Smaller values reduce memory but may require additional inventory scans.
   bigram_cutoff_freq:
-    Inclusive minimum frequency for pair merges performed by automatic training.
-    Manual `step()` calls ignore it, but model validation still enforces it.
+      Inclusive minimum frequency for pair merges performed by automatic
+      training. Manual `step()` calls ignore it, but model validation still
+      enforces it.
   """
   def __init__(
     self,

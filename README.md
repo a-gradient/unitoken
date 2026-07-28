@@ -1,6 +1,8 @@
 # FFBPE
 
 [![CI](https://github.com/tokn-ai/ffbpe/actions/workflows/ci.yml/badge.svg)](https://github.com/tokn-ai/ffbpe/actions/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/web-tokn--ai.dev%2Fffbpe-ff5c35.svg)](https://tokn-ai.dev/ffbpe/)
+[![Documentation](https://img.shields.io/badge/docs-tokn--ai.dev%2Fffbpe%2Fdocs-blue.svg)](https://tokn-ai.dev/ffbpe/docs/)
 [![PyPI](https://img.shields.io/pypi/v/ffbpe.svg)](https://pypi.org/project/ffbpe/)
 [![crates.io](https://img.shields.io/crates/v/ffbpe.svg)](https://crates.io/crates/ffbpe)
 [![docs.rs](https://docs.rs/ffbpe/badge.svg)](https://docs.rs/ffbpe)

@@ -17,14 +17,18 @@ class BpeEncoder:
   Parameters
   ----------
   unit:
-    Primary segmentation unit. Unicode models may include UTF-8 byte fallback merges.
+      Primary segmentation unit. Unicode models may include UTF-8 byte fallback
+      merges.
   special_tokens:
-    Optional list of special tokens. When provided, they are treated as indivisible tokens.
+      Optional list of special tokens. When provided, they are treated as
+      indivisible tokens.
   merges / vocab:
-    In-memory merge rules and vocabulary. If omitted, use :meth:`load` to load from files.
+      In-memory merge rules and vocabulary. If omitted, use :meth:`load` to load
+      from files.
   split_on_vocab_bigrams:
-    Whether encoding may partition PAT words using bigrams derived from the model vocabulary.
-    Disable it for byte models when that optimization is slower for the workload.
+      Whether encoding may partition PAT words using bigrams derived from the
+      model vocabulary. Disable it for byte models when that optimization is
+      slower for the workload.
   """
   def __init__(
       self,
@@ -83,28 +87,29 @@ class BpeEncoder:
     Parameters
     ----------
     name:
-      Optional model name used to derive default filenames:
-      `merges.{name}[{unit}].txt` and `vocab.{name}[{unit}].json`.
+        Optional model name used to derive default filenames:
+        `merges.{name}[{unit}].txt` and `vocab.{name}[{unit}].json`.
     unit:
-      Primary segmentation unit (`"byte"` or `"unicode"`).
+        Primary segmentation unit (`"byte"` or `"unicode"`).
     format:
-      Override the format used to decode the files (`"gpt2"` or `"unitoken"`).
-      If omitted, defaults to `"gpt2"` for byte units and `"unitoken"` for Unicode units.
+        Override the format used to decode the files (`"gpt2"` or
+        `"unitoken"`). If omitted, defaults to `"gpt2"` for byte units and
+        `"unitoken"` for Unicode units.
     special_tokens:
-      Optional list of special tokens to configure the encoder.
+        Optional list of special tokens to configure the encoder.
     input_dir:
-      Optional directory to resolve `merges_file`/`vocab_file` relative to.
+        Optional directory to resolve `merges_file`/`vocab_file` relative to.
     merges_file / vocab_file:
-      Explicit filenames/paths for merges and vocab.
+        Explicit filenames/paths for merges and vocab.
     pat_str:
-      Optional pretokenizer regex.
+        Optional pretokenizer regex.
     unicode_bigrams:
-      Optional retained Unicode bigrams used to shape pretokenizer boundaries.
+        Optional retained Unicode bigrams used to shape pretokenizer boundaries.
     unicode_bigram_mixed_boundary:
-      Mixed-boundary policy: `"keep"` or `"split"`.
+        Mixed-boundary policy: `"keep"` or `"split"`.
     split_on_vocab_bigrams:
-      Whether encoding may partition PAT words using model-vocabulary bigrams.
-      Disable it for byte models when benchmarking shows no benefit.
+        Whether encoding may partition PAT words using model-vocabulary bigrams.
+        Disable it for byte models when benchmarking shows no benefit.
     """
     resolved_format = _resolve_format(unit, format)
     if name is not None:
@@ -173,9 +178,10 @@ class BpeEncoder:
     Parameters
     ----------
     path:
-      Path to a UTF-8 text file.
+        Path to a UTF-8 text file.
     num_chunks:
-      Number of chunks to split the file into (chunk boundaries are aligned on the end-of-text token).
+        Number of chunks to split the file into. Chunk boundaries are aligned on
+        the end-of-text token.
     """
     return self._encoder.encode_file(path, num_chunks)
 
