@@ -1,0 +1,3 @@
+# Model
+
+::: ffbpe.model.BpeModel

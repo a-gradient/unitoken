@@ -1,0 +1,90 @@
+site_name: FFBPE
+site_description: Fast and faithful byte-pair encoding for large, multilingual corpora.
+site_url: https://tokn-ai.dev/ffbpe/docs/
+site_dir: site/docs
+repo_name: tokn-ai/ffbpe
+repo_url: https://github.com/tokn-ai/ffbpe
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  language: en
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Use dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: orange
+      toggle:
+        icon: material/weather-sunny
+        name: Use light mode
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Installation and quickstart: getting-started.md
+      - Train a tokenizer: guides/training.md
+      - Encode and save models: guides/encoding.md
+      - Multilingual corpora: guides/multilingual.md
+      - tiktoken compatibility: guides/tiktoken.md
+  - Python API:
+      - Overview: api/index.md
+      - Training shortcut: api/training.md
+      - Trainer: api/trainer.md
+      - Model: api/model.md
+      - Encoder: api/encoder.md
+      - Pretokenizer and counters: api/pretokenizer.md
+      - tiktoken compatibility: api/tiktoken.md
+  - Rust API: https://docs.rs/ffbpe
+  - Benchmarks: benchmarks.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - python
+          options:
+            docstring_style: numpy
+            heading_level: 2
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_bases: false
+            show_root_heading: true
+            show_source: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+strict: true

@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101418">
+    <meta
+      name="description"
+      content="FFBPE is fast and faithful byte-pair encoding for large, multilingual corpora."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="FFBPE — Exact BPE at corpus scale">
+    <meta
+      property="og:description"
+      content="Fast and faithful byte-pair encoding for large, multilingual corpora."
+    >
+    <meta property="og:url" content="https://tokn-ai.dev/ffbpe/">
+    <meta property="og:image" content="https://tokn-ai.dev/ffbpe/assets/og-wide.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="FFBPE — Exact BPE at corpus scale">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="FFBPE — Exact BPE at corpus scale">
+    <meta
+      name="twitter:description"
+      content="Fast and faithful byte-pair encoding for large, multilingual corpora."
+    >
+    <meta name="twitter:image" content="https://tokn-ai.dev/ffbpe/assets/og-wide.png">
+    <link rel="canonical" href="https://tokn-ai.dev/ffbpe/">
+    <link rel="icon" href="./assets/favicon.png" type="image/png">
+    <link rel="stylesheet" href="./assets/styles.css">
+    <title>FFBPE — Exact BPE at corpus scale</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="FFBPE home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>FFBPE</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a href="#why">Why FFBPE</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="./docs/">Docs</a>
+        <a href="https://github.com/tokn-ai/ffbpe">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero section-shell">
+        <div class="hero-copy">
+          <p class="eyebrow"><span>Rust core</span><span>Python API</span></p>
+          <h1>Exact BPE.<br><em>Corpus scale.</em></h1>
+          <p class="hero-lede">
+            Fast and faithful byte-pair encoding for large, multilingual
+            corpora—without approximating the model.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="./docs/getting-started/">
+              Start with Python
+              <span aria-hidden="true">→</span>
+            </a>
+            <a class="button button-secondary" href="https://docs.rs/ffbpe">
+              Explore Rust API
+            </a>
+          </div>
+          <div class="install-command" aria-label="Python installation command">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code>pip install ffbpe</code>
+          </div>
+        </div>
+
+        <div class="token-panel" aria-label="A multilingual corpus shaped into an exact BPE inventory">
+          <div class="panel-topline">
+            <span>corpus.ffbpe</span>
+            <span class="status"><i aria-hidden="true"></i> exact</span>
+          </div>
+          <div class="token-stage">
+            <p class="stage-label">Input stream</p>
+            <div class="input-line">
+              <span>你</span><span>好</span><span>世</span><span>界</span>
+              <span class="space">·</span><span>token</span><span>izer</span>
+            </div>
+          </div>
+          <div class="flow-line" aria-hidden="true">
+            <span>Unicode shaping</span>
+            <i></i>
+            <span>frequency boundary carried forward</span>
+          </div>
+          <div class="merge-map">
+            <div class="merge-row">
+              <span class="merge-id">m_0842</span>
+              <code>[你][好]</code>
+              <span class="merge-count">48,392</span>
+            </div>
+            <div class="merge-row">
+              <span class="merge-id">m_0843</span>
+              <code>[token][izer]</code>
+              <span class="merge-count">31,705</span>
+            </div>
+            <div class="merge-row muted">
+              <span class="merge-id">cutoff</span>
+              <code>freq ≥ measured boundary</code>
+              <span class="merge-count">exact</span>
+            </div>
+          </div>
+          <div class="panel-metrics">
+            <div>
+              <strong>606K</strong>
+              <span>unique words</span>
+            </div>
+            <div>
+              <strong>3.70s</strong>
+              <span>BPE training</span>
+            </div>
+            <p>One release run · 64 MiB Chinese fixture · not a universal speed claim.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="proof-strip" aria-label="Project facts">
+        <span>Python 3.11+</span>
+        <span>Native Rust core</span>
+        <span>MIT licensed</span>
+        <span>tiktoken-shaped API</span>
+        <span>GPT-2 + unitoken formats</span>
+      </div>
+
+      <section class="feature-section section-shell" id="why">
+        <div class="section-heading">
+          <p class="kicker">Designed for the hard part</p>
+          <h2>Keep the model exact.<br>Change the constraints.</h2>
+          <p>
+            FFBPE separates corpus shaping, counting, training, and encoding so
+            each stage can scale without quietly changing the learned model.
+          </p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card feature-card-wide">
+            <span class="card-index">01</span>
+            <h3>Shape Unicode-heavy inventories</h3>
+            <p>
+              Retain frequent adjacent Unicode pairs and split unproductive
+              boundaries before BPE training. The measured cutoff travels with
+              the inventory.
+            </p>
+            <div class="script-sample" aria-hidden="true">
+              <span>中文</span><span>한국어</span><span>日本語</span><span>العربية</span>
+            </div>
+          </article>
+
+          <article class="feature-card">
+            <span class="card-index">02</span>
+            <h3>Bound memory, not correctness</h3>
+            <p>
+              An optional hot-pair window bounds persistent occurrence postings
+              while preserving global frequencies and deterministic winners.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <span class="card-index">03</span>
+            <h3>Stream through native batches</h3>
+            <p>
+              Feed replayable Python iterables into bounded Rust batches, merge
+              partitioned counters, and avoid a corpus-sized Python dictionary.
+            </p>
+          </article>
+
+          <article class="feature-card feature-card-wide">
+            <span class="card-index">04</span>
+            <h3>Encode with familiar contracts</h3>
+            <p>
+              Save self-describing models, use GPT-2 or lossless Unicode files,
+              and bring existing integrations through a tiktoken-shaped API.
+            </p>
+            <div class="format-row">
+              <span>ffbpe.json</span>
+              <span>vocab.json</span>
+              <span>merges.txt</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="code-section section-shell">
+        <div class="code-copy">
+          <p class="kicker">Five-minute path</p>
+          <h2>Train. Validate.<br>Ship the model.</h2>
+          <p>
+            The high-level Python API covers the common path. Drop down to
+            explicit counters and trainers only when the corpus demands it.
+          </p>
+          <a class="text-link" href="./docs/getting-started/">
+            Read the Python quickstart <span aria-hidden="true">→</span>
+          </a>
+        </div>
+
+        <div class="code-window">
+          <div class="code-titlebar">
+            <span>quickstart.py</span>
+            <div aria-hidden="true"><i></i><i></i><i></i></div>
+          </div>
+          <pre><code><span class="kw">from</span> ffbpe <span class="kw">import</span> BpeEncoder, train_bpe
+
+model = train_bpe(
+  [<span class="str">"hello world"</span>, <span class="str">"hello tokenizer"</span>],
+  vocab_size=<span class="num">280</span>,
+  special_tokens=[<span class="str">"&lt;|endoftext|&gt;"</span>],
+)
+
+ids = model.encode(<span class="str">"hello world"</span>)
+<span class="kw">assert</span> model.decode(ids) == <span class="str">"hello world"</span>
+
+model.save_pretrained(<span class="str">"my-tokenizer"</span>)
+encoder = BpeEncoder.from_pretrained(<span class="str">"my-tokenizer"</span>)</code></pre>
+          <p class="code-scroll-hint">
+            Scroll horizontally to see the complete example
+            <span aria-hidden="true">→</span>
+          </p>
+        </div>
+      </section>
+
+      <section class="benchmark-section section-shell" id="benchmarks">
+        <div class="benchmark-heading">
+          <p class="kicker">Measured, qualified, reproducible</p>
+          <h2>A smaller inventory.<br>A shorter training loop.</h2>
+        </div>
+        <div class="benchmark-card">
+          <div class="benchmark-context">
+            <span>One release run · FineWeb2 Chinese fixture</span>
+            <strong>64 MiB / 10K vocabulary</strong>
+          </div>
+          <div class="chart" aria-label="Benchmark comparison">
+            <div class="chart-row">
+              <div>
+                <span>Regular Unicode</span>
+                <strong>1,803,009 words</strong>
+              </div>
+              <div class="bar bar-full"><i></i></div>
+              <span>26.681s</span>
+            </div>
+            <div class="chart-row accent">
+              <div>
+                <span>Retained bigrams</span>
+                <strong>606,153 words</strong>
+              </div>
+              <div class="bar bar-short"><i></i></div>
+              <span>3.702s</span>
+            </div>
+          </div>
+          <p class="benchmark-note">
+            This comparison measures FFBPE inventory shaping. Segmentation
+            changes, so it is not a model-parity claim. Always benchmark
+            representative text.
+          </p>
+          <a class="text-link" href="./docs/benchmarks/">
+            Read the benchmark contract <span aria-hidden="true">→</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="cta-section section-shell">
+        <div>
+          <p class="kicker">Start exact</p>
+          <h2>Your corpus is the benchmark.</h2>
+        </div>
+        <div class="cta-actions">
+          <a class="button button-light" href="./docs/">Read the docs</a>
+          <a class="button button-outline-light" href="https://github.com/tokn-ai/ffbpe">
+            View on GitHub
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <strong>FFBPE</strong>
+        <span>by tokn-ai</span>
+      </div>
+      <div class="footer-links">
+        <a href="./docs/">Python docs</a>
+        <a href="https://docs.rs/ffbpe">Rust docs</a>
+        <a href="https://pypi.org/project/ffbpe/">PyPI</a>
+        <a href="https://crates.io/crates/ffbpe">crates.io</a>
+      </div>
+      <p>Fast and faithful byte-pair encoding.</p>
+    </footer>
+  </body>
+</html>

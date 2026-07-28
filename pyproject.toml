@@ -9,6 +9,8 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://tokn-ai.dev/ffbpe/"
+Documentation = "https://tokn-ai.dev/ffbpe/docs/"
 Repository = "https://github.com/tokn-ai/ffbpe"
 Issues = "https://github.com/tokn-ai/ffbpe/issues"
 
@@ -19,6 +21,10 @@ dev = [
   "requests>=2.32.5",
   "tiktoken>=0.12.0",
   "tokenizers>=0.22.1",
+]
+docs = [
+  "mkdocs-material>=9.6,<10",
+  "mkdocstrings[python]>=0.29,<1",
 ]
 
 [tool.uv]
