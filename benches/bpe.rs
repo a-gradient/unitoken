@@ -14,7 +14,7 @@ use ffbpe::{
 
 mod pretokenizer_patterns;
 
-use pretokenizer_patterns::{DATASETS, PATTERNS};
+use pretokenizer_patterns::{DATASETS, PATTERNS, UNKNOWN_PAT_STR};
 
 fn build_gpt2_encoder_from_fixtures(name: &str) -> ffbpe::bpe::BpeEncoder<u8> {
   BpeBuilder::new()
@@ -72,7 +72,7 @@ fn bench_pretokenizer_scan(c: &mut Criterion) {
         },
       );
       #[cfg(feature = "benchmark-internals")]
-      if pattern_name != "unknown" {
+      if pattern != UNKNOWN_PAT_STR {
         group.bench_with_input(
           BenchmarkId::new("scalar", dataset_name),
           input,

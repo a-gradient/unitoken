@@ -22,7 +22,7 @@ use crate::{
       throughput_mib,
     },
   },
-  pretokenizer_patterns::{DATASETS, PATTERNS},
+  pretokenizer_patterns::{DATASETS, PATTERNS, UNKNOWN_PAT_STR},
 };
 
 pub const CONTRACT: &str = "unitoken_pretokenizer_scan_regression_v1";
@@ -105,6 +105,7 @@ pub fn run(args: Args) -> Result<(), String> {
   let mut failures = Vec::new();
 
   for (pattern_name, pattern) in PATTERNS {
+    let has_scalar_control = pattern != UNKNOWN_PAT_STR;
     let pretokenizer = PreTokenizer::try_new(&[], None, Some(pattern))
       .map_err(|error| format!("cannot configure {pattern_name}: {error}"))?;
     let reference = Regex::new(pattern)
@@ -143,7 +144,7 @@ pub fn run(args: Args) -> Result<(), String> {
       }
 
       #[cfg(feature = "benchmark-internals")]
-      {
+      if has_scalar_control {
         let scalar_fingerprint =
           fingerprint_scalar(&pretokenizer, &input)?;
         if dispatch_fingerprint != scalar_fingerprint {
@@ -174,48 +175,19 @@ pub fn run(args: Args) -> Result<(), String> {
 
       time_dispatch(&pretokenizer, &input)?;
       #[cfg(feature = "benchmark-internals")]
-      time_scalar(&pretokenizer, &input)?;
+      if has_scalar_control {
+        time_scalar(&pretokenizer, &input)?;
+      }
       time_reference(&reference, &input)?;
 
       for sample_index in 0..args.repeats {
-        #[cfg(feature = "benchmark-internals")]
-        let (dispatch_ns, scalar_ns, fancy_regex_ns) =
-          match sample_index % 3 {
-            0 => (
-              time_dispatch(&pretokenizer, &input)?,
-              time_scalar(&pretokenizer, &input)?,
-              time_reference(&reference, &input)?,
-            ),
-            1 => {
-              let scalar_ns = time_scalar(&pretokenizer, &input)?;
-              let fancy_regex_ns =
-                time_reference(&reference, &input)?;
-              let dispatch_ns = time_dispatch(&pretokenizer, &input)?;
-              (dispatch_ns, scalar_ns, fancy_regex_ns)
-            }
-            _ => {
-              let fancy_regex_ns =
-                time_reference(&reference, &input)?;
-              let dispatch_ns = time_dispatch(&pretokenizer, &input)?;
-              let scalar_ns = time_scalar(&pretokenizer, &input)?;
-              (dispatch_ns, scalar_ns, fancy_regex_ns)
-            }
-          };
-        #[cfg(not(feature = "benchmark-internals"))]
-        let (dispatch_ns, fancy_regex_ns) = if sample_index % 2 == 0 {
-          (
-            time_dispatch(&pretokenizer, &input)?,
-            time_reference(&reference, &input)?,
-          )
-        } else {
-          let fancy_regex_ns = time_reference(&reference, &input)?;
-          let dispatch_ns = time_dispatch(&pretokenizer, &input)?;
-          (dispatch_ns, fancy_regex_ns)
-        };
-        #[cfg(not(feature = "benchmark-internals"))]
-        let scalar_ns = None;
-        #[cfg(feature = "benchmark-internals")]
-        let scalar_ns = Some(scalar_ns);
+        let (dispatch_ns, scalar_ns, fancy_regex_ns) = time_sample(
+          &pretokenizer,
+          &reference,
+          &input,
+          sample_index,
+          has_scalar_control,
+        )?;
         samples.push(ScanSample {
           request: request(
             pattern_name,
@@ -377,6 +349,74 @@ fn time_reference(reference: &Regex, input: &str) -> Result<u64, String> {
   }
   black_box((token_count, token_bytes));
   Ok(duration_ns(started.elapsed()))
+}
+
+#[cfg(feature = "benchmark-internals")]
+fn time_sample(
+  pretokenizer: &PreTokenizer,
+  reference: &Regex,
+  input: &str,
+  sample_index: usize,
+  has_scalar_control: bool,
+) -> Result<(u64, Option<u64>, u64), String> {
+  if !has_scalar_control {
+    return time_sample_without_scalar(
+      pretokenizer,
+      reference,
+      input,
+      sample_index,
+    );
+  }
+  let measurement = match sample_index % 3 {
+    0 => (
+      time_dispatch(pretokenizer, input)?,
+      time_scalar(pretokenizer, input)?,
+      time_reference(reference, input)?,
+    ),
+    1 => {
+      let scalar_ns = time_scalar(pretokenizer, input)?;
+      let fancy_regex_ns = time_reference(reference, input)?;
+      let dispatch_ns = time_dispatch(pretokenizer, input)?;
+      (dispatch_ns, scalar_ns, fancy_regex_ns)
+    }
+    _ => {
+      let fancy_regex_ns = time_reference(reference, input)?;
+      let dispatch_ns = time_dispatch(pretokenizer, input)?;
+      let scalar_ns = time_scalar(pretokenizer, input)?;
+      (dispatch_ns, scalar_ns, fancy_regex_ns)
+    }
+  };
+  Ok((measurement.0, Some(measurement.1), measurement.2))
+}
+
+#[cfg(not(feature = "benchmark-internals"))]
+fn time_sample(
+  pretokenizer: &PreTokenizer,
+  reference: &Regex,
+  input: &str,
+  sample_index: usize,
+  _has_scalar_control: bool,
+) -> Result<(u64, Option<u64>, u64), String> {
+  time_sample_without_scalar(pretokenizer, reference, input, sample_index)
+}
+
+fn time_sample_without_scalar(
+  pretokenizer: &PreTokenizer,
+  reference: &Regex,
+  input: &str,
+  sample_index: usize,
+) -> Result<(u64, Option<u64>, u64), String> {
+  let (dispatch_ns, fancy_regex_ns) = if sample_index % 2 == 0 {
+    (
+      time_dispatch(pretokenizer, input)?,
+      time_reference(reference, input)?,
+    )
+  } else {
+    let fancy_regex_ns = time_reference(reference, input)?;
+    let dispatch_ns = time_dispatch(pretokenizer, input)?;
+    (dispatch_ns, fancy_regex_ns)
+  };
+  Ok((dispatch_ns, None, fancy_regex_ns))
 }
 
 #[cfg(feature = "benchmark-internals")]

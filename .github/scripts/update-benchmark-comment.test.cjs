@@ -66,7 +66,7 @@ function writeScanReport(root, side, multiplier, gatesPassed = true) {
           status: 'completed',
           measurement: {
             dispatch_ns: (1_000_000 + sampleIndex * 100_000) * multiplier,
-            ...(side === 'candidate'
+            ...(side === 'candidate' && patternName !== 'unknown'
               ? {
                 scalar_ns:
                   (1_250_000 + sampleIndex * 125_000) * multiplier,
@@ -186,7 +186,10 @@ test('buildComment renders a comparable trainer delta with legacy BBPE defaults'
       comment,
       /GPT-2\/r50k — english \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 1\.25× \| 8\.00×/,
     );
-    assert.match(comment, /unknown fallback — chinese/);
+    assert.match(
+      comment,
+      /unknown fallback — chinese \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| n\/a \| 8\.00×/,
+    );
     assert.doesNotMatch(comment, /Codec — Unicode BBPE/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
