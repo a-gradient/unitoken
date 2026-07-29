@@ -77,5 +77,9 @@ validate_optional_report baseline "$baseline_dir" codec-unicode-bbpe.json \
   unitoken_codec_regression_v1 || status=1
 validate_report candidate "$candidate_dir" codec-unicode-bbpe.json \
   unitoken_codec_regression_v1 || status=1
+validate_optional_report baseline "$baseline_dir" pretokenizer-scan.json \
+  unitoken_pretokenizer_scan_regression_v1 || status=1
+validate_report candidate "$candidate_dir" pretokenizer-scan.json \
+  unitoken_pretokenizer_scan_regression_v1 || status=1
 
 exit "$status"

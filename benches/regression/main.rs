@@ -1,6 +1,9 @@
 mod codec;
 mod common;
+#[path = "../pretokenizer_patterns.rs"]
+mod pretokenizer_patterns;
 mod pretokenizer;
+mod scan;
 mod suite;
 mod trainer;
 
@@ -26,6 +29,9 @@ enum Commands {
   Trainer(trainer::Args),
   /// Benchmark raw-corpus Unicode-bigram selection and word counting.
   Pretokenizer(pretokenizer::Args),
+  /// Benchmark common PAT scanners against direct generic regex matching.
+  #[command(name = "pretokenizer-scan")]
+  PretokenizerScan(scan::Args),
   /// Benchmark cold file encoding and independent decoding with a pinned model.
   Codec(codec::Args),
   /// Run a named or custom YAML benchmark suite.
@@ -58,6 +64,7 @@ fn main() {
     ),
     Some(Commands::Trainer(args)) => trainer::run(args),
     Some(Commands::Pretokenizer(args)) => pretokenizer::run(args),
+    Some(Commands::PretokenizerScan(args)) => scan::run(args),
     Some(Commands::Codec(args)) => codec::run(args),
     Some(Commands::Smoke(options)) => suite::run_smoke_trainer(options),
     Some(Commands::Suite(args)) => suite::run(args),

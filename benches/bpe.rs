@@ -7,12 +7,14 @@ use fancy_regex::Regex;
 
 use ffbpe::{
   bpe::{encoder::BpeBuilder, Idx},
-  pretokenizer::{
-    PreTokenizer, CL100K_PAT_STR, DEFAULT_PAT_STR, O200K_PAT_STR,
-  },
+  pretokenizer::PreTokenizer,
   spec::gpt2::Gpt2Spec,
   traits::Encode as _,
 };
+
+mod pretokenizer_patterns;
+
+use pretokenizer_patterns::{DATASETS, PATTERNS};
 
 fn build_gpt2_encoder_from_fixtures(name: &str) -> ffbpe::bpe::BpeEncoder<u8> {
   BpeBuilder::new()
@@ -40,22 +42,9 @@ fn bench_pretokenizer(c: &mut Criterion) {
 }
 
 fn bench_pretokenizer_scan(c: &mut Criterion) {
-  const UNKNOWN_PAT_STR: &str = r"\p{L}+|\p{N}{1,4}|[^\s\p{L}\p{N}]+|\s+";
-  let datasets = [
-    ("english", fixture_prefix("fixtures/tinystories_sample_5M.txt", 1 << 20)),
-    (
-      "chinese",
-      fixture_prefix("fixtures/TinyStories_all_data_zh_1M-sample.txt", 1 << 20),
-    ),
-  ];
-  let patterns = [
-    ("gpt2", DEFAULT_PAT_STR),
-    ("cl100k", CL100K_PAT_STR),
-    ("o200k", O200K_PAT_STR),
-    ("unknown", UNKNOWN_PAT_STR),
-  ];
+  let datasets = DATASETS.map(|(name, path)| (name, fixture_prefix(path, 1 << 20)));
 
-  for (pattern_name, pattern) in patterns {
+  for (pattern_name, pattern) in PATTERNS {
     let pretokenizer = PreTokenizer::try_new(&[], None, Some(pattern)).unwrap();
     let reference = Regex::new(pattern).unwrap();
     let mut group = c.benchmark_group(format!("pretokenizer/scan/{pattern_name}"));

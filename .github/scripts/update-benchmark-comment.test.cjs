@@ -49,6 +49,40 @@ function writeCodecReport(root, side, name, multiplier, gatesPassed = true) {
   }], gatesPassed);
 }
 
+function writeScanReport(root, side, multiplier, gatesPassed = true) {
+  const samples = [];
+  for (const patternName of ['gpt2', 'cl100k', 'o200k', 'unknown']) {
+    for (const datasetName of ['english', 'chinese']) {
+      for (const sampleIndex of [0, 1, 2]) {
+        samples.push({
+          request: {
+            pattern_name: patternName,
+            pattern: `${patternName}-pattern`,
+            dataset_name: datasetName,
+            input_bytes: 1_048_576,
+            input_sha256: `${datasetName}-sha256`,
+            sample_index: sampleIndex,
+          },
+          status: 'completed',
+          measurement: {
+            dispatch_ns: (1_000_000 + sampleIndex * 100_000) * multiplier,
+            fancy_regex_ns: (8_000_000 + sampleIndex * 800_000) * multiplier,
+          },
+          error: null,
+        });
+      }
+    }
+  }
+  writeReport(
+    root,
+    side,
+    'pretokenizer-scan.json',
+    'unitoken_pretokenizer_scan_regression_v1',
+    samples,
+    gatesPassed,
+  );
+}
+
 function populateReports(root, side, multiplier, options = {}) {
   const {
     extraTrainerSamples = [],
@@ -105,6 +139,7 @@ function populateReports(root, side, multiplier, options = {}) {
   for (const name of ['codec-byte.json', 'codec-unicode.json']) {
     writeCodecReport(root, side, name, multiplier);
   }
+  writeScanReport(root, side, multiplier);
 }
 
 function writeMetadata(root) {
@@ -141,7 +176,35 @@ test('buildComment renders a comparable trainer delta with legacy BBPE defaults'
       /Trainer — English byte, vocab 300 \(exact\) \| 1\.00 ms \| 1\.10 ms \| \+10\.0%/,
     );
     assert.match(comment, /Open benchmark run/);
+    assert.match(
+      comment,
+      /GPT-2\/r50k — english \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 8\.00×/,
+    );
+    assert.match(comment, /unknown fallback — chinese/);
     assert.doesNotMatch(comment, /Codec — Unicode BBPE/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('buildComment renders a candidate scan when the base command is absent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unitoken-benchmark-comment-'));
+  try {
+    populateReports(root, 'baseline', 1);
+    populateReports(root, 'candidate', 1.1);
+    fs.rmSync(path.join(root, 'baseline', 'pretokenizer-scan.json'));
+    const comment = buildComment({
+      resultsDir: root,
+      conclusion: 'success',
+      baseSha: '0123456789abcdef',
+      headSha: 'fedcba9876543210',
+      runUrl: 'https://example.test/actions/runs/1',
+    });
+    assert.match(comment, /All base and PR correctness gates passed/);
+    assert.match(
+      comment,
+      /GPT-2\/r50k — english \| missing \| 1\.21 ms \| n\/a \| 8\.00×/,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
