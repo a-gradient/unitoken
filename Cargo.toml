@@ -73,6 +73,7 @@ inherits = "release"
 [features]
 default = []
 hotpath = ["hotpath/hotpath", "hotpath/hotpath-alloc"]
+benchmark-internals = []
 
 fmt-npz = ["npyz/npz"]
 

@@ -28,7 +28,7 @@ pub(super) fn for_each_known<'a>(
   }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "benchmark-internals"))]
 fn for_each_known_with_backend<
   'a,
   B: backend::Backend,
@@ -54,7 +54,7 @@ fn for_each_known_with_backend<
   }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "benchmark-internals"))]
 pub(super) fn for_each_known_scalar<'a>(
   text: &'a str,
   pattern: &str,

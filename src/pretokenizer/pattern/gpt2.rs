@@ -22,7 +22,11 @@ pub(super) fn recognizes(pattern: &str) -> bool {
 pub(super) struct Gpt2;
 
 impl Pattern for Gpt2 {
-  fn pretoken_end<B: Backend>(text: &str, start: usize) -> usize {
+  fn pretoken_end<B: Backend>(
+    text: &str,
+    start: usize,
+    backend: &mut B,
+  ) -> usize {
     let bytes = text.as_bytes();
     let contraction = if bytes[start] == b'\'' {
       contraction_len(&bytes[start..])
@@ -37,7 +41,7 @@ impl Pattern for Gpt2 {
       let next_start = start + 1;
       let class = char_class(char_at(text, next_start));
       if class != CharClass::Whitespace {
-        return scan_same_class_with::<B>(text, next_start, class);
+        return scan_same_class_with(text, next_start, class, backend);
       }
     }
 
@@ -45,7 +49,7 @@ impl Pattern for Gpt2 {
     if class == CharClass::Whitespace {
       return scan_whitespace(text, start);
     }
-    scan_same_class_with::<B>(text, start, class)
+    scan_same_class_with(text, start, class, backend)
   }
 }
 

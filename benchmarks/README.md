@@ -72,15 +72,19 @@ This microbenchmark excludes special-token routing, Unicode/vocabulary bigram
 splitting, word counting, and BPE so that it isolates PAT matching. The
 `dispatch` case exercises normal pattern selection; the unknown pattern
 therefore measures the generic fallback. Its pattern is fixed so Criterion
-results remain reproducible. The synthetic run covers the profitability case
-for the architecture-specific ASCII backends; normal language corpora mostly
-exercise their scalar short-run prefix.
+results remain reproducible. The synthetic run covers the long-run
+profitability case for the architecture-specific ASCII backends. Build with
+`--features benchmark-internals` to add a forced `scalar` case for every known
+pattern, measured in the same binary as normal dispatch.
 
-Known scanners select the backend once per input segment. AArch64 uses NEON
-when available; x86-64 uses runtime-detected AVX2 with an SSE2 baseline; other
-targets retain the scalar backend. Every vector backend first handles a short
-scalar prefix and stops before non-ASCII bytes, leaving UTF-8 and Unicode class
-semantics to the shared scalar path.
+Known scanners select the backend once per input. AArch64 uses NEON when
+available; x86-64 uses runtime-detected AVX2 with an SSE2 baseline; other
+targets retain the scalar backend. SIMD property masks are byte-indexed over
+arbitrary 16/32-byte blocks and cached across pretoken boundaries, so short
+English tokens share classification work instead of restarting SIMD per word.
+Long accepted runs switch to a direct vector loop. Inputs containing Unicode
+retain the existing scalar scanner until a Unicode property-mask backend can
+outperform it without changing regex semantics.
 
 The regression harness runs the same matrix with paired dispatch/reference
 ordering, exact token-stream fingerprint gates, and a machine-readable report:

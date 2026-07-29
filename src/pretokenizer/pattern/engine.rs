@@ -5,13 +5,21 @@ use crate::MyResult;
 use super::backend::{Backend, Scalar};
 
 pub(super) trait Pattern {
-  fn pretoken_end<B: Backend>(text: &str, start: usize) -> usize;
+  fn pretoken_end<B: Backend>(
+    text: &str,
+    start: usize,
+    backend: &mut B,
+  ) -> usize;
 }
 
 pub(super) fn for_each<'a, P: Pattern>(
   text: &'a str,
   emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> MyResult<()> {
+  if !text.is_ascii() {
+    return for_each_with_backend::<P, Scalar>(text, emit);
+  }
+
   #[cfg(target_arch = "aarch64")]
   {
     use super::backend::Neon;
@@ -43,9 +51,10 @@ pub(super) fn for_each_with_backend<
   text: &'a str,
   mut emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> MyResult<()> {
+  let mut backend = B::default();
   let mut start = 0;
   while start < text.len() {
-    let end = P::pretoken_end::<B>(text, start);
+    let end = P::pretoken_end(text, start, &mut backend);
     debug_assert!(end > start);
     debug_assert!(text.is_char_boundary(end));
     emit(&text[start..end])?;

@@ -71,6 +71,26 @@ fn bench_pretokenizer_scan(c: &mut Criterion) {
           })
         },
       );
+      #[cfg(feature = "benchmark-internals")]
+      if pattern_name != "unknown" {
+        group.bench_with_input(
+          BenchmarkId::new("scalar", dataset_name),
+          input,
+          |b, input| {
+            b.iter(|| {
+              let mut count = 0_usize;
+              let mut bytes = 0_usize;
+              pretokenizer
+                .for_each_pretoken_scalar(black_box(input), |token| {
+                  count += 1;
+                  bytes += token.len();
+                })
+                .unwrap();
+              black_box((count, bytes))
+            })
+          },
+        );
+      }
       group.bench_with_input(
         BenchmarkId::new("fancy_regex", dataset_name),
         input,

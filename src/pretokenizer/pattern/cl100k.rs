@@ -14,11 +14,15 @@ pub(super) const PATTERN: &str =
 pub(super) struct Cl100k;
 
 impl Pattern for Cl100k {
-  fn pretoken_end<B: Backend>(text: &str, start: usize) -> usize {
+  fn pretoken_end<B: Backend>(
+    text: &str,
+    start: usize,
+    backend: &mut B,
+  ) -> usize {
     if let Some(end) = case_insensitive_contraction_end(text, start) {
       return end;
     }
-    if let Some(end) = letter_end::<B>(text, start) {
+    if let Some(end) = letter_end(text, start, backend) {
       return end;
     }
 
@@ -26,7 +30,7 @@ impl Pattern for Cl100k {
     if is_number(first) {
       return scan_limited_numbers(text, start);
     }
-    if let Some(end) = punctuation_end::<B>(text, start) {
+    if let Some(end) = punctuation_end(text, start, backend) {
       return end;
     }
     if is_whitespace(first) {
@@ -39,7 +43,11 @@ impl Pattern for Cl100k {
   }
 }
 
-fn letter_end<B: Backend>(text: &str, start: usize) -> Option<usize> {
+fn letter_end<B: Backend>(
+  text: &str,
+  start: usize,
+  backend: &mut B,
+) -> Option<usize> {
   let first = char_at(text, start);
   let word_start = if !matches!(first, '\r' | '\n') && !is_letter(first) && !is_number(first) {
     next_boundary(text, start)
@@ -49,10 +57,18 @@ fn letter_end<B: Backend>(text: &str, start: usize) -> Option<usize> {
   if word_start >= text.len() || !is_letter(char_at(text, word_start)) {
     return None;
   }
-  Some(scan_predicate::<B>(
+  if !text.as_bytes()[word_start].is_ascii() {
+    return Some(super::common::scan_while(
+      text,
+      word_start,
+      is_letter,
+    ));
+  }
+  Some(scan_predicate(
     text,
     word_start,
     AsciiPredicate::Letter,
+    backend,
   ))
 }
 
@@ -70,6 +86,7 @@ fn scan_limited_numbers(text: &str, start: usize) -> usize {
 fn punctuation_end<B: Backend>(
   text: &str,
   start: usize,
+  backend: &mut B,
 ) -> Option<usize> {
   let word_start = if text.as_bytes()[start] == b' ' {
     start + 1
@@ -79,11 +96,20 @@ fn punctuation_end<B: Backend>(
   if word_start >= text.len() || !is_other(char_at(text, word_start)) {
     return None;
   }
-  let punctuation_end =
-    scan_predicate::<B>(text, word_start, AsciiPredicate::Other);
-  Some(scan_predicate::<B>(
+  let punctuation_end = if text.as_bytes()[word_start].is_ascii() {
+    scan_predicate(
+      text,
+      word_start,
+      AsciiPredicate::Other,
+      backend,
+    )
+  } else {
+    super::common::scan_while(text, word_start, is_other)
+  };
+  Some(scan_predicate(
     text,
     punctuation_end,
     AsciiPredicate::CrLf,
+    backend,
   ))
 }

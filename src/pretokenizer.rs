@@ -237,8 +237,9 @@ impl PreTokenizer {
   /// This applies only `re_pat`: special-token recognition, retained Unicode
   /// bigram splitting, and model-vocabulary bigram splitting are intentionally
   /// excluded. Known GPT-2/r50k, cl100k, and o200k patterns use built-in
-  /// scanners with architecture-adaptive ASCII runs and a scalar Unicode
-  /// fallback; custom patterns continue to use `fancy-regex`.
+  /// scanners with architecture-adaptive all-ASCII blocks; inputs containing
+  /// Unicode retain the scalar scanner. Custom patterns continue to use
+  /// `fancy-regex`.
   pub fn for_each_pretoken<'a>(
     &self,
     text: &'a str,
@@ -248,6 +249,30 @@ impl PreTokenizer {
       emit(token);
       Ok(())
     })
+  }
+
+  /// Visit PAT-level pretokens through the scalar known-pattern backend.
+  ///
+  /// This is exposed only for paired benchmark measurements.
+  #[cfg(feature = "benchmark-internals")]
+  #[doc(hidden)]
+  pub fn for_each_pretoken_scalar<'a>(
+    &self,
+    text: &'a str,
+    mut emit: impl FnMut(&'a str),
+  ) -> MyResult<()> {
+    if let Some(result) =
+      pattern::for_each_known_scalar(text, self.re_pat.as_str(), |token| {
+        emit(token);
+        Ok(())
+      })
+    {
+      return result;
+    }
+    for found in self.re_pat.find_iter(text) {
+      emit(found?.as_str());
+    }
+    Ok(())
   }
 
   fn emit_vocab_bigram_segments<'a>(

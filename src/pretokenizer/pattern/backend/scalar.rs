@@ -1,91 +1,66 @@
 use super::{AsciiPredicate, Backend, is_pattern_whitespace};
 
+#[derive(Default)]
 pub(in crate::pretokenizer::pattern) struct Scalar;
 
 impl Backend for Scalar {
   #[inline]
   fn scan_ascii(
+    &mut self,
     bytes: &[u8],
     start: usize,
     predicate: AsciiPredicate,
   ) -> usize {
-    scan_ascii_to(bytes, start, bytes.len(), predicate)
-  }
-}
-
-#[inline]
-pub(in crate::pretokenizer::pattern) fn scan_ascii_up_to(
-  bytes: &[u8],
-  start: usize,
-  predicate: AsciiPredicate,
-  max_bytes: usize,
-) -> usize {
-  let limit = bytes.len().min(start.saturating_add(max_bytes));
-  scan_ascii_to(bytes, start, limit, predicate)
-}
-
-#[inline]
-fn scan_ascii_to(
-  bytes: &[u8],
-  start: usize,
-  limit: usize,
-  predicate: AsciiPredicate,
-) -> usize {
-  match predicate {
-    AsciiPredicate::Letter => scan_with(
-      bytes,
-      start,
-      limit,
-      |byte| byte.is_ascii_alphabetic(),
-    ),
-    AsciiPredicate::Number => {
-      scan_with(bytes, start, limit, |byte| byte.is_ascii_digit())
+    let mut end = start;
+    match predicate {
+      AsciiPredicate::Letter => {
+        while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+          end += 1;
+        }
+      }
+      AsciiPredicate::Number => {
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+          end += 1;
+        }
+      }
+      AsciiPredicate::Whitespace => {
+        while end < bytes.len() && is_pattern_whitespace(bytes[end]) {
+          end += 1;
+        }
+      }
+      AsciiPredicate::Other => {
+        while end < bytes.len()
+          && bytes[end].is_ascii()
+          && !bytes[end].is_ascii_alphabetic()
+          && !bytes[end].is_ascii_digit()
+          && !is_pattern_whitespace(bytes[end])
+        {
+          end += 1;
+        }
+      }
+      AsciiPredicate::Uppercase => {
+        while end < bytes.len() && bytes[end].is_ascii_uppercase() {
+          end += 1;
+        }
+      }
+      AsciiPredicate::Lowercase => {
+        while end < bytes.len() && bytes[end].is_ascii_lowercase() {
+          end += 1;
+        }
+      }
+      AsciiPredicate::CrLf => {
+        while end < bytes.len() && matches!(bytes[end], b'\r' | b'\n') {
+          end += 1;
+        }
+      }
+      AsciiPredicate::CrLfOrSlash => {
+        while end < bytes.len()
+          && matches!(bytes[end], b'\r' | b'\n' | b'/')
+        {
+          end += 1;
+        }
+      }
     }
-    AsciiPredicate::Whitespace => scan_with(
-      bytes,
-      start,
-      limit,
-      is_pattern_whitespace,
-    ),
-    AsciiPredicate::Other => scan_with(bytes, start, limit, |byte| {
-      byte.is_ascii()
-        && !byte.is_ascii_alphabetic()
-        && !byte.is_ascii_digit()
-        && !is_pattern_whitespace(byte)
-    }),
-    AsciiPredicate::Uppercase => scan_with(
-      bytes,
-      start,
-      limit,
-      |byte| byte.is_ascii_uppercase(),
-    ),
-    AsciiPredicate::Lowercase => scan_with(
-      bytes,
-      start,
-      limit,
-      |byte| byte.is_ascii_lowercase(),
-    ),
-    AsciiPredicate::CrLf => scan_with(bytes, start, limit, |byte| {
-      matches!(byte, b'\r' | b'\n')
-    }),
-    AsciiPredicate::CrLfOrSlash => {
-      scan_with(bytes, start, limit, |byte| {
-        matches!(byte, b'\r' | b'\n' | b'/')
-      })
-    }
+    end
   }
-}
-
-#[inline]
-fn scan_with(
-  bytes: &[u8],
-  start: usize,
-  limit: usize,
-  predicate: impl Fn(u8) -> bool,
-) -> usize {
-  let mut end = start;
-  while end < limit && predicate(bytes[end]) {
-    end += 1;
-  }
-  end
 }

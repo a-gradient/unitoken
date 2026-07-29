@@ -27,11 +27,15 @@ pub(super) const PATTERN: &str = concat!(
 pub(super) struct O200k;
 
 impl Pattern for O200k {
-  fn pretoken_end<B: Backend>(text: &str, start: usize) -> usize {
-    if let Some(end) = word_branch_one_end::<B>(text, start) {
+  fn pretoken_end<B: Backend>(
+    text: &str,
+    start: usize,
+    backend: &mut B,
+  ) -> usize {
+    if let Some(end) = word_branch_one_end(text, start, backend) {
       return end;
     }
-    if let Some(end) = word_branch_two_end::<B>(text, start) {
+    if let Some(end) = word_branch_two_end(text, start, backend) {
       return end;
     }
 
@@ -39,7 +43,7 @@ impl Pattern for O200k {
     if is_number(first) {
       return scan_limited_numbers(text, start);
     }
-    if let Some(end) = punctuation_end::<B>(text, start) {
+    if let Some(end) = punctuation_end(text, start, backend) {
       return end;
     }
     if is_whitespace(first) {
@@ -55,38 +59,43 @@ impl Pattern for O200k {
 fn word_branch_one_end<B: Backend>(
   text: &str,
   start: usize,
+  backend: &mut B,
 ) -> Option<usize> {
-  match_with_optional_prefix::<B>(text, start, word_branch_one_core::<B>)
+  match_with_optional_prefix(text, start, backend, word_branch_one_core::<B>)
 }
 
 fn word_branch_two_end<B: Backend>(
   text: &str,
   start: usize,
+  backend: &mut B,
 ) -> Option<usize> {
-  match_with_optional_prefix::<B>(text, start, word_branch_two_core::<B>)
+  match_with_optional_prefix(text, start, backend, word_branch_two_core::<B>)
 }
 
 fn match_with_optional_prefix<B: Backend>(
   text: &str,
   start: usize,
-  matcher: fn(&str, usize) -> Option<usize>,
+  backend: &mut B,
+  matcher: fn(&str, usize, &mut B) -> Option<usize>,
 ) -> Option<usize> {
   let first = char_at(text, start);
   if !matches!(first, '\r' | '\n') && !is_letter(first) && !is_number(first) {
     let word_start = next_boundary(text, start);
-    if word_start < text.len() && let Some(end) = matcher(text, word_start) {
+    if word_start < text.len()
+      && let Some(end) = matcher(text, word_start, backend)
+    {
       return Some(end);
     }
   }
-  matcher(text, start)
+  matcher(text, start, backend)
 }
 
 fn word_branch_one_core<B: Backend>(
   text: &str,
   start: usize,
+  backend: &mut B,
 ) -> Option<usize> {
-  let upper_end =
-    scan_predicate::<B>(text, start, AsciiPredicate::Uppercase);
+  let upper_end = scan_upper(text, start, backend);
   let lower_follows =
     upper_end < text.len() && is_o200k_lower_or_shared(char_at(text, upper_end));
   let lower_start = if lower_follows {
@@ -101,22 +110,20 @@ fn word_branch_one_core<B: Backend>(
   } else {
     return None;
   };
-  let end =
-    scan_predicate::<B>(text, lower_start, AsciiPredicate::Lowercase);
+  let end = scan_lower(text, lower_start, backend);
   Some(with_optional_contraction(text, end))
 }
 
 fn word_branch_two_core<B: Backend>(
   text: &str,
   start: usize,
+  backend: &mut B,
 ) -> Option<usize> {
-  let upper_end =
-    scan_predicate::<B>(text, start, AsciiPredicate::Uppercase);
+  let upper_end = scan_upper(text, start, backend);
   if upper_end == start {
     return None;
   }
-  let end =
-    scan_predicate::<B>(text, upper_end, AsciiPredicate::Lowercase);
+  let end = scan_lower(text, upper_end, backend);
   Some(with_optional_contraction(text, end))
 }
 
@@ -142,6 +149,7 @@ fn scan_limited_numbers(text: &str, start: usize) -> usize {
 fn punctuation_end<B: Backend>(
   text: &str,
   start: usize,
+  backend: &mut B,
 ) -> Option<usize> {
   let word_start = if text.as_bytes()[start] == b' ' {
     start + 1
@@ -151,11 +159,70 @@ fn punctuation_end<B: Backend>(
   if word_start >= text.len() || !is_other(char_at(text, word_start)) {
     return None;
   }
-  let punctuation_end =
-    scan_predicate::<B>(text, word_start, AsciiPredicate::Other);
-  Some(scan_predicate::<B>(
+  let punctuation_end = if text.as_bytes()[word_start].is_ascii() {
+    scan_predicate(
+      text,
+      word_start,
+      AsciiPredicate::Other,
+      backend,
+    )
+  } else {
+    super::common::scan_while(text, word_start, is_other)
+  };
+  Some(scan_predicate(
     text,
     punctuation_end,
     AsciiPredicate::CrLfOrSlash,
+    backend,
   ))
+}
+
+#[inline]
+fn scan_upper<B: Backend>(
+  text: &str,
+  start: usize,
+  backend: &mut B,
+) -> usize {
+  if start == text.len() {
+    return start;
+  }
+  if text.as_bytes()[start].is_ascii() {
+    scan_predicate(
+      text,
+      start,
+      AsciiPredicate::Uppercase,
+      backend,
+    )
+  } else {
+    super::common::scan_while(
+      text,
+      start,
+      super::common::is_o200k_upper_or_shared,
+    )
+  }
+}
+
+#[inline]
+fn scan_lower<B: Backend>(
+  text: &str,
+  start: usize,
+  backend: &mut B,
+) -> usize {
+  if start == text.len() {
+    return start;
+  }
+  if text.as_bytes()[start].is_ascii() {
+    scan_predicate(
+      text,
+      start,
+      AsciiPredicate::Lowercase,
+      backend,
+    )
+  } else {
+    super::common::scan_while(
+      text,
+      start,
+      is_o200k_lower_or_shared,
+    )
+  }
 }

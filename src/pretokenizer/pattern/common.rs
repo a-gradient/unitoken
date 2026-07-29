@@ -122,15 +122,20 @@ pub(super) fn scan_same_class_with<B: Backend>(
   text: &str,
   start: usize,
   class: CharClass,
+  backend: &mut B,
 ) -> usize {
   debug_assert_ne!(class, CharClass::Whitespace);
-  scan_predicate::<B>(text, start, predicate_for_class(class))
+  if !text.as_bytes()[start].is_ascii() {
+    return scan_while(text, start, |ch| char_class(ch) == class);
+  }
+  scan_predicate(text, start, predicate_for_class(class), backend)
 }
 
 pub(super) fn scan_predicate<B: Backend>(
   text: &str,
   start: usize,
   predicate: AsciiPredicate,
+  backend: &mut B,
 ) -> usize {
   if start == text.len() {
     return start;
@@ -138,7 +143,7 @@ pub(super) fn scan_predicate<B: Backend>(
   if !text.as_bytes()[start].is_ascii() {
     return scan_unicode_predicate(text, start, predicate);
   }
-  let ascii_end = B::scan_ascii(text.as_bytes(), start, predicate);
+  let ascii_end = backend.scan_ascii(text.as_bytes(), start, predicate);
   if ascii_end == text.len() || text.as_bytes()[ascii_end].is_ascii() {
     return ascii_end;
   }
