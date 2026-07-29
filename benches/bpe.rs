@@ -40,6 +40,7 @@ fn bench_pretokenizer(c: &mut Criterion) {
 }
 
 fn bench_pretokenizer_scan(c: &mut Criterion) {
+  const UNKNOWN_PAT_STR: &str = r"\p{L}+|\p{N}{1,4}|[^\s\p{L}\p{N}]+|\s+";
   let datasets = [
     ("english", fixture_prefix("fixtures/tinystories_sample_5M.txt", 1 << 20)),
     (
@@ -51,6 +52,7 @@ fn bench_pretokenizer_scan(c: &mut Criterion) {
     ("gpt2", DEFAULT_PAT_STR),
     ("cl100k", CL100K_PAT_STR),
     ("o200k", O200K_PAT_STR),
+    ("unknown", UNKNOWN_PAT_STR),
   ];
 
   for (pattern_name, pattern) in patterns {
@@ -60,7 +62,7 @@ fn bench_pretokenizer_scan(c: &mut Criterion) {
     for (dataset_name, input) in &datasets {
       group.throughput(Throughput::Bytes(input.len() as u64));
       group.bench_with_input(
-        BenchmarkId::new("specialized", dataset_name),
+        BenchmarkId::new("dispatch", dataset_name),
         input,
         |b, input| {
           b.iter(|| {
