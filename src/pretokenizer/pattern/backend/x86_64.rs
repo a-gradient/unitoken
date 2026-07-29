@@ -180,10 +180,6 @@ unsafe fn classify_sse2(
     }
     AsciiPredicate::Uppercase => range_sse2(value, b'A', b'Z'),
     AsciiPredicate::Lowercase => range_sse2(value, b'a', b'z'),
-    AsciiPredicate::CrLf => _mm_or_si128(
-      _mm_cmpeq_epi8(value, _mm_set1_epi8(b'\r' as i8)),
-      _mm_cmpeq_epi8(value, _mm_set1_epi8(b'\n' as i8)),
-    ),
     AsciiPredicate::CrLfOrSlash => _mm_or_si128(
       _mm_or_si128(
         _mm_cmpeq_epi8(value, _mm_set1_epi8(b'\r' as i8)),
@@ -239,10 +235,6 @@ unsafe fn classify_avx2(
     }
     AsciiPredicate::Uppercase => range_avx2(value, b'A', b'Z'),
     AsciiPredicate::Lowercase => range_avx2(value, b'a', b'z'),
-    AsciiPredicate::CrLf => _mm256_or_si256(
-      _mm256_cmpeq_epi8(value, _mm256_set1_epi8(b'\r' as i8)),
-      _mm256_cmpeq_epi8(value, _mm256_set1_epi8(b'\n' as i8)),
-    ),
     AsciiPredicate::CrLfOrSlash => _mm256_or_si256(
       _mm256_or_si256(
         _mm256_cmpeq_epi8(value, _mm256_set1_epi8(b'\r' as i8)),

@@ -124,10 +124,6 @@ fn accepted_neon(
     }
     AsciiPredicate::Uppercase => range_neon(value, b'A', b'Z'),
     AsciiPredicate::Lowercase => range_neon(value, b'a', b'z'),
-    AsciiPredicate::CrLf => vorrq_u8(
-      vceqq_u8(value, vdupq_n_u8(b'\r')),
-      vceqq_u8(value, vdupq_n_u8(b'\n')),
-    ),
     AsciiPredicate::CrLfOrSlash => vorrq_u8(
       vorrq_u8(
         vceqq_u8(value, vdupq_n_u8(b'\r')),

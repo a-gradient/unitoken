@@ -28,7 +28,6 @@ pub(super) enum AsciiPredicate {
   Other,
   Uppercase,
   Lowercase,
-  CrLf,
   CrLfOrSlash,
 }
 
@@ -45,7 +44,7 @@ pub(super) trait Backend: Default {
 pub(super) struct BlockCache {
   start: usize,
   valid: u32,
-  masks: [u32; 8],
+  masks: [u32; 7],
   classified: u8,
   initialized: bool,
 }
@@ -135,7 +134,6 @@ pub(super) fn matches_ascii(
     }
     AsciiPredicate::Uppercase => byte.is_ascii_uppercase(),
     AsciiPredicate::Lowercase => byte.is_ascii_lowercase(),
-    AsciiPredicate::CrLf => matches!(byte, b'\r' | b'\n'),
     AsciiPredicate::CrLfOrSlash => {
       matches!(byte, b'\r' | b'\n' | b'/')
     }
@@ -154,14 +152,13 @@ pub(super) fn is_pattern_whitespace(byte: u8) -> bool {
 mod tests {
   use super::*;
 
-  const PREDICATES: [AsciiPredicate; 8] = [
+  const PREDICATES: [AsciiPredicate; 7] = [
     AsciiPredicate::Letter,
     AsciiPredicate::Number,
     AsciiPredicate::Whitespace,
     AsciiPredicate::Other,
     AsciiPredicate::Uppercase,
     AsciiPredicate::Lowercase,
-    AsciiPredicate::CrLf,
     AsciiPredicate::CrLfOrSlash,
   ];
   const RUN_LENGTHS: [usize; 11] =
@@ -176,7 +173,6 @@ mod tests {
       AsciiPredicate::Other => b'!',
       AsciiPredicate::Uppercase => b'Z',
       AsciiPredicate::Lowercase => b'z',
-      AsciiPredicate::CrLf => b'\n',
       AsciiPredicate::CrLfOrSlash => b'/',
     }
   }

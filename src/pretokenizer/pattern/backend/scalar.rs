@@ -48,11 +48,6 @@ impl Backend for Scalar {
           end += 1;
         }
       }
-      AsciiPredicate::CrLf => {
-        while end < bytes.len() && matches!(bytes[end], b'\r' | b'\n') {
-          end += 1;
-        }
-      }
       AsciiPredicate::CrLfOrSlash => {
         while end < bytes.len()
           && matches!(bytes[end], b'\r' | b'\n' | b'/')

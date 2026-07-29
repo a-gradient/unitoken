@@ -279,9 +279,6 @@ fn scan_unicode_predicate(
     AsciiPredicate::Lowercase => {
       scan_while(text, start, is_o200k_lower_or_shared)
     }
-    AsciiPredicate::CrLf => {
-      scan_while(text, start, |ch| matches!(ch, '\r' | '\n'))
-    }
     AsciiPredicate::CrLfOrSlash => scan_while(text, start, |ch| {
       matches!(ch, '\r' | '\n' | '/')
     }),

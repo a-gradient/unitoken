@@ -24,11 +24,7 @@ pub(super) fn for_each_known<'a>(
       gpt2::for_each_scalar(text, emit)
     })
   } else if pattern == cl100k::PATTERN {
-    Some(if text.is_ascii() {
-      engine::for_each::<cl100k::Cl100k>(text, emit)
-    } else {
-      cl100k::for_each_scalar(text, emit)
-    })
+    Some(cl100k::for_each(text, emit))
   } else if pattern == o200k::PATTERN {
     Some(if text.is_ascii() {
       engine::for_each::<o200k::O200k>(text, emit)
@@ -54,9 +50,7 @@ fn for_each_known_with_backend<
       text, emit,
     ))
   } else if pattern == cl100k::PATTERN {
-    Some(engine::for_each_with_backend::<cl100k::Cl100k, B>(
-      text, emit,
-    ))
+    Some(cl100k::for_each(text, emit))
   } else if pattern == o200k::PATTERN {
     Some(engine::for_each_with_backend::<o200k::O200k, B>(
       text, emit,
@@ -75,7 +69,7 @@ pub(super) fn for_each_known_scalar<'a>(
   if gpt2::recognizes(pattern) {
     Some(gpt2::for_each_scalar(text, emit))
   } else if pattern == cl100k::PATTERN {
-    Some(cl100k::for_each_scalar(text, emit))
+    Some(cl100k::for_each(text, emit))
   } else if pattern == o200k::PATTERN {
     Some(o200k::for_each_scalar(text, emit))
   } else {
