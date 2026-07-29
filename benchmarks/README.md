@@ -94,10 +94,13 @@ cargo bench --bench regression -- pretokenizer-scan \
   --output out/benchmarks/regression/pretokenizer-scan.json
 ```
 
-CI requires the candidate report and includes median scan times and
-dispatch-versus-regex speedups in the automated benchmark comment. A base
-report is optional so the first revision introducing the protocol remains
-comparable with an older base checkout.
+CI requires the candidate report and enables `benchmark-internals` when the
+revision provides it. The automated benchmark comment includes median scan
+times, a same-binary dispatch-versus-scalar control, and
+dispatch-versus-regex speedups. The scalar control is interleaved with normal
+dispatch and reference measurements to reduce runner-order bias. A base report
+is optional so the first revision introducing the protocol remains comparable
+with an older base checkout.
 
 Benchmark cold model/file encoding and isolated decode compute in independent
 child processes:

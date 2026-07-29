@@ -66,6 +66,12 @@ function writeScanReport(root, side, multiplier, gatesPassed = true) {
           status: 'completed',
           measurement: {
             dispatch_ns: (1_000_000 + sampleIndex * 100_000) * multiplier,
+            ...(side === 'candidate'
+              ? {
+                scalar_ns:
+                  (1_250_000 + sampleIndex * 125_000) * multiplier,
+              }
+              : {}),
             fancy_regex_ns: (8_000_000 + sampleIndex * 800_000) * multiplier,
           },
           error: null,
@@ -178,7 +184,7 @@ test('buildComment renders a comparable trainer delta with legacy BBPE defaults'
     assert.match(comment, /Open benchmark run/);
     assert.match(
       comment,
-      /GPT-2\/r50k — english \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 8\.00×/,
+      /GPT-2\/r50k — english \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 1\.25× \| 8\.00×/,
     );
     assert.match(comment, /unknown fallback — chinese/);
     assert.doesNotMatch(comment, /Codec — Unicode BBPE/);
@@ -203,7 +209,7 @@ test('buildComment renders a candidate scan when the base command is absent', ()
     assert.match(comment, /All base and PR correctness gates passed/);
     assert.match(
       comment,
-      /GPT-2\/r50k — english \| missing \| 1\.21 ms \| n\/a \| 8\.00×/,
+      /GPT-2\/r50k — english \| missing \| 1\.21 ms \| n\/a \| 1\.25× \| 8\.00×/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

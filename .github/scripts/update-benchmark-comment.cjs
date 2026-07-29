@@ -275,6 +275,7 @@ function scanRows(report) {
         patternName,
         datasetName,
         dispatchTimes: [],
+        scalarTimes: [],
         fancyRegexTimes: [],
         workloads: new Set(),
         failed: report.gates.passed === false,
@@ -283,6 +284,7 @@ function scanRows(report) {
     }
     row.failed ||= sample?.status === 'failed' || sample?.error != null;
     row.dispatchTimes.push(sample?.measurement?.dispatch_ns);
+    row.scalarTimes.push(sample?.measurement?.scalar_ns);
     row.fancyRegexTimes.push(sample?.measurement?.fancy_regex_ns);
     row.workloads.add(JSON.stringify(stableValue({
       pattern: sample?.request?.pattern ?? null,
@@ -292,6 +294,7 @@ function scanRows(report) {
   }
   for (const row of rows.values()) {
     row.dispatch = median(row.dispatchTimes);
+    row.scalar = median(row.scalarTimes);
     row.fancyRegex = median(row.fancyRegexTimes);
   }
   return rows;
@@ -493,9 +496,12 @@ function scanTableRow(row, baselineState, candidateState) {
   const speedup = candidate && !candidate.failed
     ? formatSpeedup(candidate.fancyRegex, candidate.dispatch)
     : 'n/a';
+  const scalarSpeedup = candidate && !candidate.failed
+    ? formatSpeedup(candidate.scalar, candidate.dispatch)
+    : 'n/a';
   const pattern = SCAN_PATTERN_LABELS.get(row.patternName) ?? row.patternName;
   const label = escapeTableCell(`${pattern} — ${row.datasetName}`);
-  return `| ${label} | ${scanCell(baselineState, baseline, 'dispatch')} | ${scanCell(candidateState, candidate, 'dispatch')} | ${delta} | ${speedup} |`;
+  return `| ${label} | ${scanCell(baselineState, baseline, 'dispatch')} | ${scanCell(candidateState, candidate, 'dispatch')} | ${delta} | ${scalarSpeedup} | ${speedup} |`;
 }
 
 function reportSet(resultsDir, side, errors) {
@@ -653,10 +659,10 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     '',
     '### Pretokenizer pattern scan',
     '',
-    'Median scan time over paired samples; `PR vs regex` compares normal dispatch with direct `fancy-regex` on the PR revision.',
+    'Median scan time over paired samples. `PR vs scalar` is an interleaved same-binary control when the candidate report provides it; `PR vs regex` compares normal dispatch with direct `fancy-regex`.',
     '',
-    '| Pattern / corpus | Base dispatch | PR dispatch | Δ | PR vs regex |',
-    '| --- | ---: | ---: | ---: | ---: |',
+    '| Pattern / corpus | Base dispatch | PR dispatch | Δ | PR vs scalar | PR vs regex |',
+    '| --- | ---: | ---: | ---: | ---: | ---: |',
   );
   for (const row of scanRowsToRender) {
     lines.push(scanTableRow(

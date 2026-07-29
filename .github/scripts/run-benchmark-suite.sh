@@ -14,15 +14,20 @@ suite_config=$3
 mkdir -p "$output_dir"
 cd "$checkout"
 
+cargo_features=()
+if grep -q '^benchmark-internals = ' Cargo.toml; then
+  cargo_features=(--features benchmark-internals)
+fi
+
 # Keep base/head ordering from turning fixture page-cache state into a PR delta.
 find fixtures -maxdepth 1 -type f -exec sha256sum {} + >/dev/null
 
-cargo bench --bench regression --no-run
+cargo bench --bench regression "${cargo_features[@]}" --no-run
 
 # Each revision consumes its own config. The report renderer treats cases that
 # exist on only one side as missing, which lets benchmark coverage evolve
 # without requiring an older revision to understand a newer schema.
-cargo bench --bench regression -- suite \
+cargo bench --bench regression "${cargo_features[@]}" -- suite \
   --config "$suite_config" \
   --output-dir "$output_dir"
 
@@ -30,6 +35,6 @@ cargo bench --bench regression -- suite \
 # base revisions legitimately lack it, while the candidate report is required
 # by the validator once the command exists in that checkout.
 if [[ -f benches/regression/scan.rs ]]; then
-  cargo bench --bench regression -- pretokenizer-scan \
+  cargo bench --bench regression "${cargo_features[@]}" -- pretokenizer-scan \
     --output "$output_dir/pretokenizer-scan.json"
 fi
