@@ -1,9 +1,12 @@
+use crate::MyResult;
+
 use super::{
   backend::{AsciiPredicate, Backend},
   common::{
     case_insensitive_contraction_end, char_at, is_letter, is_number,
-    is_o200k_lower_or_shared, is_other, is_whitespace, next_boundary,
-    scan_predicate, scan_through_last_newline, scan_whitespace,
+    is_o200k_lower_or_shared, is_o200k_upper_or_shared, is_other,
+    is_whitespace, next_boundary, scan_predicate,
+    scan_through_last_newline, scan_whitespace,
   },
   engine::Pattern,
 };
@@ -25,6 +28,159 @@ pub(super) const PATTERN: &str = concat!(
 );
 
 pub(super) struct O200k;
+
+pub(super) fn for_each_scalar<'a>(
+  text: &'a str,
+  mut emit: impl FnMut(&'a str) -> MyResult<()>,
+) -> MyResult<()> {
+  let mut start = 0;
+  while start < text.len() {
+    let end = scalar_pretoken_end(text, start);
+    debug_assert!(end > start);
+    debug_assert!(text.is_char_boundary(end));
+    emit(&text[start..end])?;
+    start = end;
+  }
+  Ok(())
+}
+
+fn scalar_pretoken_end(text: &str, start: usize) -> usize {
+  if let Some(end) = scalar_word_branch_one_end(text, start) {
+    return end;
+  }
+  if let Some(end) = scalar_word_branch_two_end(text, start) {
+    return end;
+  }
+
+  let first = char_at(text, start);
+  if is_number(first) {
+    return scan_limited_numbers(text, start);
+  }
+  if let Some(end) = scalar_punctuation_end(text, start) {
+    return end;
+  }
+  if is_whitespace(first) {
+    if let Some(end) = scan_through_last_newline(text, start) {
+      return end;
+    }
+    return scan_whitespace(text, start);
+  }
+  next_boundary(text, start)
+}
+
+fn scalar_word_branch_one_end(
+  text: &str,
+  start: usize,
+) -> Option<usize> {
+  scalar_match_with_optional_prefix(
+    text,
+    start,
+    scalar_word_branch_one_core,
+  )
+}
+
+fn scalar_word_branch_two_end(
+  text: &str,
+  start: usize,
+) -> Option<usize> {
+  scalar_match_with_optional_prefix(
+    text,
+    start,
+    scalar_word_branch_two_core,
+  )
+}
+
+fn scalar_match_with_optional_prefix(
+  text: &str,
+  start: usize,
+  matcher: fn(&str, usize) -> Option<usize>,
+) -> Option<usize> {
+  let first = char_at(text, start);
+  if !matches!(first, '\r' | '\n')
+    && !is_letter(first)
+    && !is_number(first)
+  {
+    let word_start = next_boundary(text, start);
+    if word_start < text.len()
+      && let Some(end) = matcher(text, word_start)
+    {
+      return Some(end);
+    }
+  }
+  matcher(text, start)
+}
+
+fn scalar_word_branch_one_core(
+  text: &str,
+  start: usize,
+) -> Option<usize> {
+  let upper_end = super::common::scan_while(
+    text,
+    start,
+    is_o200k_upper_or_shared,
+  );
+  let lower_follows =
+    upper_end < text.len() && is_o200k_lower_or_shared(char_at(text, upper_end));
+  let lower_start = if lower_follows {
+    upper_end
+  } else if upper_end > start {
+    text[start..upper_end]
+      .char_indices()
+      .rev()
+      .find_map(|(offset, ch)| {
+        is_o200k_lower_or_shared(ch).then_some(start + offset)
+      })?
+  } else {
+    return None;
+  };
+  let end = super::common::scan_while(
+    text,
+    lower_start,
+    is_o200k_lower_or_shared,
+  );
+  Some(with_optional_contraction(text, end))
+}
+
+fn scalar_word_branch_two_core(
+  text: &str,
+  start: usize,
+) -> Option<usize> {
+  let upper_end = super::common::scan_while(
+    text,
+    start,
+    is_o200k_upper_or_shared,
+  );
+  if upper_end == start {
+    return None;
+  }
+  let end = super::common::scan_while(
+    text,
+    upper_end,
+    is_o200k_lower_or_shared,
+  );
+  Some(with_optional_contraction(text, end))
+}
+
+fn scalar_punctuation_end(
+  text: &str,
+  start: usize,
+) -> Option<usize> {
+  let word_start = if text.as_bytes()[start] == b' ' {
+    start + 1
+  } else {
+    start
+  };
+  if word_start >= text.len() || !is_other(char_at(text, word_start)) {
+    return None;
+  }
+  let punctuation_end =
+    super::common::scan_while(text, word_start, is_other);
+  Some(super::common::scan_while(
+    text,
+    punctuation_end,
+    |ch| matches!(ch, '\r' | '\n' | '/'),
+  ))
+}
 
 impl Pattern for O200k {
   #[inline(always)]

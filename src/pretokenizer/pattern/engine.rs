@@ -16,10 +16,6 @@ pub(super) fn for_each<'a, P: Pattern>(
   text: &'a str,
   emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> MyResult<()> {
-  if !text.is_ascii() {
-    return for_each_with_backend::<P, Scalar>(text, emit);
-  }
-
   #[cfg(target_arch = "aarch64")]
   {
     use super::backend::Neon;

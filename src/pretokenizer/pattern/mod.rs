@@ -18,17 +18,29 @@ pub(super) fn for_each_known<'a>(
   emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> Option<MyResult<()>> {
   if gpt2::recognizes(pattern) {
-    Some(engine::for_each::<gpt2::Gpt2>(text, emit))
+    Some(if text.is_ascii() {
+      engine::for_each::<gpt2::Gpt2>(text, emit)
+    } else {
+      gpt2::for_each_scalar(text, emit)
+    })
   } else if pattern == cl100k::PATTERN {
-    Some(engine::for_each::<cl100k::Cl100k>(text, emit))
+    Some(if text.is_ascii() {
+      engine::for_each::<cl100k::Cl100k>(text, emit)
+    } else {
+      cl100k::for_each_scalar(text, emit)
+    })
   } else if pattern == o200k::PATTERN {
-    Some(engine::for_each::<o200k::O200k>(text, emit))
+    Some(if text.is_ascii() {
+      engine::for_each::<o200k::O200k>(text, emit)
+    } else {
+      o200k::for_each_scalar(text, emit)
+    })
   } else {
     None
   }
 }
 
-#[cfg(any(test, feature = "benchmark-internals"))]
+#[cfg(test)]
 fn for_each_known_with_backend<
   'a,
   B: backend::Backend,
@@ -60,7 +72,15 @@ pub(super) fn for_each_known_scalar<'a>(
   pattern: &str,
   emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> Option<MyResult<()>> {
-  for_each_known_with_backend::<backend::Scalar>(text, pattern, emit)
+  if gpt2::recognizes(pattern) {
+    Some(gpt2::for_each_scalar(text, emit))
+  } else if pattern == cl100k::PATTERN {
+    Some(cl100k::for_each_scalar(text, emit))
+  } else if pattern == o200k::PATTERN {
+    Some(o200k::for_each_scalar(text, emit))
+  } else {
+    None
+  }
 }
 
 #[cfg(all(test, target_arch = "aarch64"))]

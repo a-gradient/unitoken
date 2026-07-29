@@ -118,6 +118,15 @@ pub(super) fn scan_while(
   end
 }
 
+pub(super) fn scan_same_class(
+  text: &str,
+  start: usize,
+  class: CharClass,
+) -> usize {
+  debug_assert_ne!(class, CharClass::Whitespace);
+  scan_while(text, start, |ch| char_class(ch) == class)
+}
+
 #[inline]
 pub(super) fn scan_same_class_with<B: Backend>(
   text: &str,

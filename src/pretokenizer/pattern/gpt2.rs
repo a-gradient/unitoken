@@ -1,7 +1,10 @@
+use crate::MyResult;
+
 use super::{
   backend::Backend,
   common::{
-    char_at, char_class, scan_same_class_with, scan_whitespace, CharClass,
+    char_at, char_class, scan_same_class, scan_same_class_with,
+    scan_whitespace, CharClass,
   },
   engine::Pattern,
 };
@@ -20,6 +23,47 @@ pub(super) fn recognizes(pattern: &str) -> bool {
 }
 
 pub(super) struct Gpt2;
+
+pub(super) fn for_each_scalar<'a>(
+  text: &'a str,
+  mut emit: impl FnMut(&'a str) -> MyResult<()>,
+) -> MyResult<()> {
+  let mut start = 0;
+  while start < text.len() {
+    let end = scalar_pretoken_end(text, start);
+    debug_assert!(end > start);
+    debug_assert!(text.is_char_boundary(end));
+    emit(&text[start..end])?;
+    start = end;
+  }
+  Ok(())
+}
+
+fn scalar_pretoken_end(text: &str, start: usize) -> usize {
+  let bytes = text.as_bytes();
+  let contraction = if bytes[start] == b'\'' {
+    contraction_len(&bytes[start..])
+  } else {
+    None
+  };
+  if let Some(len) = contraction {
+    return start + len;
+  }
+
+  if bytes[start] == b' ' && start + 1 < bytes.len() {
+    let next_start = start + 1;
+    let class = char_class(char_at(text, next_start));
+    if class != CharClass::Whitespace {
+      return scan_same_class(text, next_start, class);
+    }
+  }
+
+  let class = char_class(char_at(text, start));
+  if class == CharClass::Whitespace {
+    return scan_whitespace(text, start);
+  }
+  scan_same_class(text, start, class)
+}
 
 impl Pattern for Gpt2 {
   #[inline(always)]
