@@ -60,15 +60,17 @@ suite's `--unicode-bigrams` option.
 It is the raw-file path; Python `Source.scan()`, Parquet/SQL decoding, and
 Python-to-Rust prefetch require a separate source benchmark.
 
-For a scan-only comparison of the optimized default GPT-2 pattern against the
-generic `fancy-regex` path on the checked-in English and Chinese fixtures, run:
+For scan-only comparisons of the specialized GPT-2/r50k, cl100k, and o200k
+patterns against the generic `fancy-regex` path on the checked-in English and
+Chinese fixtures, run:
 
 ```bash
 cargo bench --bench bpe -- pretokenizer/scan
 ```
 
 This microbenchmark excludes special-token routing, Unicode/vocabulary bigram
-splitting, word counting, and BPE so that it isolates PAT matching.
+splitting, word counting, and BPE so that it isolates PAT matching. Unknown or
+modified pattern strings continue to use the generic regex path.
 
 Benchmark cold model/file encoding and isolated decode compute in independent
 child processes:

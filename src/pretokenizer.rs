@@ -16,7 +16,7 @@ use crate::{
   bpe::Freq,
 };
 
-mod default_pattern;
+mod pattern;
 
 /// Unicode bigrams retained by a frequency selection and its effective boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,8 +29,14 @@ pub struct UnicodeBigramSelection {
   pub max_excluded_freq: Option<Freq>,
 }
 
-/// GPT-2-compatible default pretokenizer pattern.
-pub const DEFAULT_PAT_STR: &str = default_pattern::PATTERN;
+/// Original GPT-2 pretokenizer pattern used when no pattern is configured.
+pub const DEFAULT_PAT_STR: &str = pattern::GPT2_PATTERN;
+/// Canonical tiktoken GPT-2/r50k/p50k pretokenizer pattern.
+pub const R50K_PAT_STR: &str = pattern::R50K_PATTERN;
+/// Canonical tiktoken cl100k pretokenizer pattern.
+pub const CL100K_PAT_STR: &str = pattern::CL100K_PATTERN;
+/// Canonical tiktoken o200k pretokenizer pattern.
+pub const O200K_PAT_STR: &str = pattern::O200K_PATTERN;
 
 lazy_static! {
   /// Compiled fallback and correctness oracle for [`DEFAULT_PAT_STR`].
@@ -230,8 +236,8 @@ impl PreTokenizer {
   ///
   /// This applies only `re_pat`: special-token recognition, retained Unicode
   /// bigram splitting, and model-vocabulary bigram splitting are intentionally
-  /// excluded. The exact default pattern uses the built-in scalar scanner;
-  /// custom patterns continue to use `fancy-regex`.
+  /// excluded. Known GPT-2/r50k, cl100k, and o200k patterns use built-in scalar
+  /// scanners; custom patterns continue to use `fancy-regex`.
   pub fn for_each_pretoken<'a>(
     &self,
     text: &'a str,
@@ -471,8 +477,8 @@ fn for_each_pattern_pretoken<'a>(
   pat: &Regex,
   mut emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> MyResult<()> {
-  if pat.as_str() == DEFAULT_PAT_STR {
-    return default_pattern::for_each(s, emit);
+  if let Some(result) = pattern::for_each_known(s, pat.as_str(), &mut emit) {
+    return result;
   }
   for found in pat.find_iter(s) {
     let token = found?.as_str();
@@ -965,29 +971,52 @@ mod tests {
   use crate::bigram::Bigram;
   use ordermap::OrderMap;
 
-  fn default_reference_tokens(text: &str) -> Vec<&str> {
-    DEFAULT_PAT
+  fn reference_tokens<'a>(pattern: &Regex, text: &'a str) -> Vec<&'a str> {
+    pattern
       .find_iter(text)
       .map(|found| found.unwrap().as_str())
       .collect()
   }
 
-  fn default_fast_tokens(text: &str) -> Vec<&str> {
+  fn fast_tokens<'a>(pattern: &Regex, text: &'a str) -> Vec<&'a str> {
     let mut tokens = Vec::new();
-    default_pattern::for_each(text, |token| {
+    pattern::for_each_known(text, pattern.as_str(), |token| {
       tokens.push(token);
       Ok(())
     })
+    .expect("test pattern must have a specialized scanner")
     .unwrap();
     tokens
   }
 
-  fn assert_default_scanner_parity(text: &str) {
-    assert_eq!(
-      default_fast_tokens(text),
-      default_reference_tokens(text),
-      "default scanner mismatch for {text:?}",
-    );
+  fn assert_scanner_parity(pattern: &Regex, text: &str) {
+    let actual = fast_tokens(pattern, text);
+    let expected = reference_tokens(pattern, text);
+    if actual != expected {
+      let index = actual
+        .iter()
+        .zip(&expected)
+        .position(|(actual, expected)| actual != expected)
+        .unwrap_or(actual.len().min(expected.len()));
+      panic!(
+        "scanner mismatch for pattern {:?} at token {index}: actual={:?}, expected={:?}",
+        pattern.as_str(),
+        actual.get(index),
+        expected.get(index),
+      );
+    }
+  }
+
+  fn known_patterns() -> Vec<Regex> {
+    [
+      DEFAULT_PAT_STR,
+      R50K_PAT_STR,
+      CL100K_PAT_STR,
+      O200K_PAT_STR,
+    ]
+    .into_iter()
+    .map(|pattern| Regex::new(pattern).unwrap())
+    .collect()
   }
 
   #[test]
@@ -1102,27 +1131,32 @@ mod tests {
   }
 
   #[test]
-  fn test_default_scanner_matches_regex_on_edge_cases() {
+  fn test_known_scanners_match_regex_on_edge_cases() {
     for text in [
       "",
       "Hello, world! It's 2024.",
       "'s'd'm't'll've're",
-      "'S'LL'Ve'RE",
+      "'S'LL'Ve'RE'ſ",
       "a  b   c    ",
       "a\t b\r\nc\u{A0}\u{2003}d",
       "你好，世界！Now是2024年。",
       "한글かなカナ mixed العربية १२३",
       "e\u{301} café 👩‍💻🏳️‍🌈",
+      "lower UPPER TitleCase HTTPServer ABC中文def",
+      "a1 12 123 1234 １２３４",
+      "a\r\nb\n\nc\r\r\nd trailing \t  ",
       "²¼ⅠⅫ⑴",
       "<|endoftext|>before<|endoftext|>after",
       " punctuation...?!—–_+=/\\\"'s ",
     ] {
-      assert_default_scanner_parity(text);
+      for pattern in known_patterns() {
+        assert_scanner_parity(&pattern, text);
+      }
     }
   }
 
   #[test]
-  fn test_default_scanner_matches_regex_on_deterministic_unicode_mix() {
+  fn test_known_scanners_match_regex_on_deterministic_unicode_mix() {
     const ALPHABET: &[char] = &[
       'a', 'Z', '0', '9', '\'', ' ', '\t', '\n', '\r', ',', '—', '你', '界', '한', '글',
       'か', 'ナ', 'é', '\u{301}', '\u{A0}', '\u{2003}', '²', 'Ⅻ', '👩', '\u{200D}', '💻',
@@ -1135,13 +1169,48 @@ mod tests {
         .wrapping_add(1_442_695_040_888_963_407);
       text.push(ALPHABET[(state as usize) % ALPHABET.len()]);
     }
-    assert_default_scanner_parity(&text);
+    for pattern in known_patterns() {
+      assert_scanner_parity(&pattern, &text);
+    }
   }
 
   #[test]
-  fn test_default_scanner_matches_regex_on_fixture() {
-    let text = std::fs::read_to_string("fixtures/tinystories_sample_5M.txt").unwrap();
-    assert_default_scanner_parity(&text);
+  fn test_known_scanners_match_regex_on_unicode_scalar_sample() {
+    let mut state = 0xa076_1d64_78bd_642f_u64;
+    let mut text = String::new();
+    let mut count = 0;
+    while count < 50_000 {
+      state ^= state >> 12;
+      state ^= state << 25;
+      state ^= state >> 27;
+      let value = (state.wrapping_mul(0x2545_f491_4f6c_dd1d) % 0x11_0000) as u32;
+      if let Some(ch) = char::from_u32(value) {
+        text.push(ch);
+        count += 1;
+      }
+    }
+    for pattern in known_patterns() {
+      assert_scanner_parity(&pattern, &text);
+    }
+  }
+
+  #[test]
+  fn test_known_scanners_match_regex_on_fixtures() {
+    for path in [
+      "fixtures/tinystories_sample_5M.txt",
+      "fixtures/TinyStories_all_data_zh_1M-sample.txt",
+    ] {
+      let text = std::fs::read_to_string(path).unwrap();
+      let end = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .take_while(|offset| *offset <= 1 << 20)
+        .last()
+        .unwrap_or(0);
+      for pattern in known_patterns() {
+        assert_scanner_parity(&pattern, &text[..end]);
+      }
+    }
   }
 
   #[test]
