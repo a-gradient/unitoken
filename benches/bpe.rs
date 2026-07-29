@@ -42,7 +42,11 @@ fn bench_pretokenizer(c: &mut Criterion) {
 }
 
 fn bench_pretokenizer_scan(c: &mut Criterion) {
-  let datasets = DATASETS.map(|(name, path)| (name, fixture_prefix(path, 1 << 20)));
+  let mut datasets = DATASETS
+    .map(|(name, path)| (name, fixture_prefix(path, 1 << 20)))
+    .into_iter()
+    .collect::<Vec<_>>();
+  datasets.push(("long_ascii", "a".repeat(1 << 20)));
 
   for (pattern_name, pattern) in PATTERNS {
     let pretokenizer = PreTokenizer::try_new(&[], None, Some(pattern)).unwrap();

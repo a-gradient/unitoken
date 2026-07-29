@@ -236,8 +236,9 @@ impl PreTokenizer {
   ///
   /// This applies only `re_pat`: special-token recognition, retained Unicode
   /// bigram splitting, and model-vocabulary bigram splitting are intentionally
-  /// excluded. Known GPT-2/r50k, cl100k, and o200k patterns use built-in scalar
-  /// scanners; custom patterns continue to use `fancy-regex`.
+  /// excluded. Known GPT-2/r50k, cl100k, and o200k patterns use built-in
+  /// scanners with architecture-adaptive ASCII runs and a scalar Unicode
+  /// fallback; custom patterns continue to use `fancy-regex`.
   pub fn for_each_pretoken<'a>(
     &self,
     text: &'a str,
@@ -978,32 +979,117 @@ mod tests {
       .collect()
   }
 
-  fn fast_tokens<'a>(pattern: &Regex, text: &'a str) -> Vec<&'a str> {
+  #[derive(Clone, Copy, Debug)]
+  enum TestScannerBackend {
+    Native,
+    Scalar,
+    #[cfg(target_arch = "aarch64")]
+    Neon,
+    #[cfg(target_arch = "x86_64")]
+    Sse2,
+    #[cfg(target_arch = "x86_64")]
+    Avx2,
+  }
+
+  fn available_test_backends() -> Vec<TestScannerBackend> {
+    let mut backends = vec![
+      TestScannerBackend::Native,
+      TestScannerBackend::Scalar,
+    ];
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+      backends.push(TestScannerBackend::Neon);
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+      backends.push(TestScannerBackend::Sse2);
+      if std::arch::is_x86_feature_detected!("avx2") {
+        backends.push(TestScannerBackend::Avx2);
+      }
+    }
+    backends
+  }
+
+  fn fast_tokens<'a>(
+    backend: TestScannerBackend,
+    pattern: &Regex,
+    text: &'a str,
+  ) -> Vec<&'a str> {
     let mut tokens = Vec::new();
-    pattern::for_each_known(text, pattern.as_str(), |token| {
-      tokens.push(token);
-      Ok(())
-    })
+    let result = match backend {
+      TestScannerBackend::Native => {
+        pattern::for_each_known(text, pattern.as_str(), |token| {
+          tokens.push(token);
+          Ok(())
+        })
+      }
+      TestScannerBackend::Scalar => {
+        pattern::for_each_known_scalar(
+          text,
+          pattern.as_str(),
+          |token| {
+            tokens.push(token);
+            Ok(())
+          },
+        )
+      }
+      #[cfg(target_arch = "aarch64")]
+      TestScannerBackend::Neon => {
+        pattern::for_each_known_neon(
+          text,
+          pattern.as_str(),
+          |token| {
+            tokens.push(token);
+            Ok(())
+          },
+        )
+      }
+      #[cfg(target_arch = "x86_64")]
+      TestScannerBackend::Sse2 => {
+        pattern::for_each_known_sse2(
+          text,
+          pattern.as_str(),
+          |token| {
+            tokens.push(token);
+            Ok(())
+          },
+        )
+      }
+      #[cfg(target_arch = "x86_64")]
+      TestScannerBackend::Avx2 => {
+        pattern::for_each_known_avx2(
+          text,
+          pattern.as_str(),
+          |token| {
+            tokens.push(token);
+            Ok(())
+          },
+        )
+      }
+    };
+    result
     .expect("test pattern must have a specialized scanner")
     .unwrap();
     tokens
   }
 
   fn assert_scanner_parity(pattern: &Regex, text: &str) {
-    let actual = fast_tokens(pattern, text);
     let expected = reference_tokens(pattern, text);
-    if actual != expected {
-      let index = actual
-        .iter()
-        .zip(&expected)
-        .position(|(actual, expected)| actual != expected)
-        .unwrap_or(actual.len().min(expected.len()));
-      panic!(
-        "scanner mismatch for pattern {:?} at token {index}: actual={:?}, expected={:?}",
-        pattern.as_str(),
-        actual.get(index),
-        expected.get(index),
-      );
+    for backend in available_test_backends() {
+      let actual = fast_tokens(backend, pattern, text);
+      if actual != expected {
+        let index = actual
+          .iter()
+          .zip(&expected)
+          .position(|(actual, expected)| actual != expected)
+          .unwrap_or(actual.len().min(expected.len()));
+        panic!(
+          "{backend:?} scanner mismatch for pattern {:?} at token {index}: actual={:?}, expected={:?}",
+          pattern.as_str(),
+          actual.get(index),
+          expected.get(index),
+        );
+      }
     }
   }
 
@@ -1138,7 +1224,7 @@ mod tests {
       "'s'd'm't'll've're",
       "'S'LL'Ve'RE'ſ",
       "a  b   c    ",
-      "a\t b\r\nc\u{A0}\u{2003}d",
+      "a\t b\x0B\x0Cc\r\nc\u{A0}\u{2003}d",
       "你好，世界！Now是2024年。",
       "한글かなカナ mixed العربية १२३",
       "e\u{301} café 👩‍💻🏳️‍🌈",
@@ -1151,6 +1237,24 @@ mod tests {
     ] {
       for pattern in known_patterns() {
         assert_scanner_parity(&pattern, text);
+      }
+    }
+  }
+
+  #[test]
+  fn test_known_scanners_match_regex_at_simd_lane_boundaries() {
+    for run_length in 0..=65 {
+      let inputs = [
+        format!("{}你tail", "A".repeat(run_length)),
+        format!("{}0tail", "z".repeat(run_length)),
+        format!("{} tail", "!".repeat(run_length)),
+        format!("{}A", "/".repeat(run_length)),
+        format!("{}A", "\n".repeat(run_length)),
+      ];
+      for input in inputs {
+        for pattern in known_patterns() {
+          assert_scanner_parity(&pattern, &input);
+        }
       }
     }
   }
