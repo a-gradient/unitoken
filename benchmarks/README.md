@@ -60,6 +60,33 @@ suite's `--unicode-bigrams` option.
 It is the raw-file path; Python `Source.scan()`, Parquet/SQL decoding, and
 Python-to-Rust prefetch require a separate source benchmark.
 
+For scan-only comparisons of the GPT-2/r50k, cl100k, o200k, and a fixed
+representative unknown pattern against direct `fancy-regex` matching on the
+checked-in English and Chinese fixtures, run:
+
+```bash
+cargo bench --bench bpe -- pretokenizer/scan
+```
+
+This microbenchmark excludes special-token routing, Unicode/vocabulary bigram
+splitting, word counting, and BPE so that it isolates PAT matching. The
+`dispatch` case exercises normal pattern selection; the unknown pattern
+therefore measures the generic fallback. Its pattern is fixed so Criterion
+results remain reproducible.
+
+The regression harness runs the same matrix with paired dispatch/reference
+ordering, exact token-stream fingerprint gates, and a machine-readable report:
+
+```bash
+cargo bench --bench regression -- pretokenizer-scan \
+  --output out/benchmarks/regression/pretokenizer-scan.json
+```
+
+CI requires the candidate report and includes median scan times and
+dispatch-versus-regex speedups in the automated benchmark comment. A base
+report is optional so the first revision introducing the protocol remains
+comparable with an older base checkout.
+
 Benchmark cold model/file encoding and isolated decode compute in independent
 child processes:
 

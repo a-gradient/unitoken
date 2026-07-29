@@ -16,6 +16,8 @@ use crate::{
   bpe::Freq,
 };
 
+mod pattern;
+
 /// Unicode bigrams retained by a frequency selection and its effective boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicodeBigramSelection {
@@ -27,9 +29,18 @@ pub struct UnicodeBigramSelection {
   pub max_excluded_freq: Option<Freq>,
 }
 
+/// Original GPT-2 pretokenizer pattern used when no pattern is configured.
+pub const DEFAULT_PAT_STR: &str = pattern::GPT2_PATTERN;
+/// Canonical tiktoken GPT-2/r50k/p50k pretokenizer pattern.
+pub const R50K_PAT_STR: &str = pattern::R50K_PATTERN;
+/// Canonical tiktoken cl100k pretokenizer pattern.
+pub const CL100K_PAT_STR: &str = pattern::CL100K_PATTERN;
+/// Canonical tiktoken o200k pretokenizer pattern.
+pub const O200K_PAT_STR: &str = pattern::O200K_PATTERN;
+
 lazy_static! {
-  /// PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-  pub static ref DEFAULT_PAT: Regex = Regex::new(r"'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+").unwrap();
+  /// Compiled fallback and correctness oracle for [`DEFAULT_PAT_STR`].
+  pub static ref DEFAULT_PAT: Regex = Regex::new(DEFAULT_PAT_STR).unwrap();
 }
 pub const DEFAULT_EOT: &'static str = "<|endoftext|>";
 
@@ -219,6 +230,23 @@ impl PreTokenizer {
       self.unicode_bigram_mixed_boundary,
       |word| self.emit_vocab_bigram_segments(word, split_points, emit),
     )
+  }
+
+  /// Visit PAT-level pretokens without allocating an output collection.
+  ///
+  /// This applies only `re_pat`: special-token recognition, retained Unicode
+  /// bigram splitting, and model-vocabulary bigram splitting are intentionally
+  /// excluded. Known GPT-2/r50k, cl100k, and o200k patterns use built-in scalar
+  /// scanners; custom patterns continue to use `fancy-regex`.
+  pub fn for_each_pretoken<'a>(
+    &self,
+    text: &'a str,
+    mut emit: impl FnMut(&'a str),
+  ) -> MyResult<()> {
+    for_each_pattern_pretoken(text, &self.re_pat, |token| {
+      emit(token);
+      Ok(())
+    })
   }
 
   fn emit_vocab_bigram_segments<'a>(
@@ -430,18 +458,31 @@ pub(crate) fn for_each_pretoken<'a>(
   unicode_bigram_mixed_boundary: UnicodeBigramMixedBoundary,
   mut emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> MyResult<()> {
-  for found in pat.find_iter(s) {
-    let token = found?.as_str();
+  for_each_pattern_pretoken(s, pat, |token| {
     if let Some(unicode_bigrams) = unicode_bigrams {
       for_each_unicode_bigram_segment(
         token,
         unicode_bigrams,
         unicode_bigram_mixed_boundary,
         &mut emit,
-      )?;
+      )
     } else {
-      emit(token)?;
+      emit(token)
     }
+  })
+}
+
+fn for_each_pattern_pretoken<'a>(
+  s: &'a str,
+  pat: &Regex,
+  mut emit: impl FnMut(&'a str) -> MyResult<()>,
+) -> MyResult<()> {
+  if let Some(result) = pattern::for_each_known(s, pat.as_str(), &mut emit) {
+    return result;
+  }
+  for found in pat.find_iter(s) {
+    let token = found?.as_str();
+    emit(token)?;
   }
   Ok(())
 }
@@ -926,9 +967,57 @@ pub fn save_words<W: std::io::Write>(w: W, words: &ordermap::OrderMap<String, Fr
 
 #[cfg(test)]
 mod tests {
-  use ordermap::OrderMap;
   use super::*;
   use crate::bigram::Bigram;
+  use ordermap::OrderMap;
+
+  fn reference_tokens<'a>(pattern: &Regex, text: &'a str) -> Vec<&'a str> {
+    pattern
+      .find_iter(text)
+      .map(|found| found.unwrap().as_str())
+      .collect()
+  }
+
+  fn fast_tokens<'a>(pattern: &Regex, text: &'a str) -> Vec<&'a str> {
+    let mut tokens = Vec::new();
+    pattern::for_each_known(text, pattern.as_str(), |token| {
+      tokens.push(token);
+      Ok(())
+    })
+    .expect("test pattern must have a specialized scanner")
+    .unwrap();
+    tokens
+  }
+
+  fn assert_scanner_parity(pattern: &Regex, text: &str) {
+    let actual = fast_tokens(pattern, text);
+    let expected = reference_tokens(pattern, text);
+    if actual != expected {
+      let index = actual
+        .iter()
+        .zip(&expected)
+        .position(|(actual, expected)| actual != expected)
+        .unwrap_or(actual.len().min(expected.len()));
+      panic!(
+        "scanner mismatch for pattern {:?} at token {index}: actual={:?}, expected={:?}",
+        pattern.as_str(),
+        actual.get(index),
+        expected.get(index),
+      );
+    }
+  }
+
+  fn known_patterns() -> Vec<Regex> {
+    [
+      DEFAULT_PAT_STR,
+      R50K_PAT_STR,
+      CL100K_PAT_STR,
+      O200K_PAT_STR,
+    ]
+    .into_iter()
+    .map(|pattern| Regex::new(pattern).unwrap())
+    .collect()
+  }
 
   #[test]
   fn test_piece_pipeline_applies_special_pat_unicode_and_vocab_splits() {
@@ -1039,6 +1128,106 @@ mod tests {
     .into_iter()
     .collect::<BTreeMap<_, _>>();
     assert_eq!(tokens, expected_tokens);
+  }
+
+  #[test]
+  fn test_known_scanners_match_regex_on_edge_cases() {
+    for text in [
+      "",
+      "Hello, world! It's 2024.",
+      "'s'd'm't'll've're",
+      "'S'LL'Ve'RE'ſ",
+      "a  b   c    ",
+      "a\t b\r\nc\u{A0}\u{2003}d",
+      "你好，世界！Now是2024年。",
+      "한글かなカナ mixed العربية १२३",
+      "e\u{301} café 👩‍💻🏳️‍🌈",
+      "lower UPPER TitleCase HTTPServer ABC中文def",
+      "a1 12 123 1234 １２３４",
+      "a\r\nb\n\nc\r\r\nd trailing \t  ",
+      "²¼ⅠⅫ⑴",
+      "<|endoftext|>before<|endoftext|>after",
+      " punctuation...?!—–_+=/\\\"'s ",
+    ] {
+      for pattern in known_patterns() {
+        assert_scanner_parity(&pattern, text);
+      }
+    }
+  }
+
+  #[test]
+  fn test_known_scanners_match_regex_on_deterministic_unicode_mix() {
+    const ALPHABET: &[char] = &[
+      'a', 'Z', '0', '9', '\'', ' ', '\t', '\n', '\r', ',', '—', '你', '界', '한', '글',
+      'か', 'ナ', 'é', '\u{301}', '\u{A0}', '\u{2003}', '²', 'Ⅻ', '👩', '\u{200D}', '💻',
+    ];
+    let mut state = 0x4d59_5df4_d0f3_3173_u64;
+    let mut text = String::new();
+    for _ in 0..20_000 {
+      state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+      text.push(ALPHABET[(state as usize) % ALPHABET.len()]);
+    }
+    for pattern in known_patterns() {
+      assert_scanner_parity(&pattern, &text);
+    }
+  }
+
+  #[test]
+  fn test_known_scanners_match_regex_on_unicode_scalar_sample() {
+    let mut state = 0xa076_1d64_78bd_642f_u64;
+    let mut text = String::new();
+    let mut count = 0;
+    while count < 50_000 {
+      state ^= state >> 12;
+      state ^= state << 25;
+      state ^= state >> 27;
+      let value = (state.wrapping_mul(0x2545_f491_4f6c_dd1d) % 0x11_0000) as u32;
+      if let Some(ch) = char::from_u32(value) {
+        text.push(ch);
+        count += 1;
+      }
+    }
+    for pattern in known_patterns() {
+      assert_scanner_parity(&pattern, &text);
+    }
+  }
+
+  #[test]
+  fn test_known_scanners_match_regex_on_fixtures() {
+    for path in [
+      "fixtures/tinystories_sample_5M.txt",
+      "fixtures/TinyStories_all_data_zh_1M-sample.txt",
+    ] {
+      let text = std::fs::read_to_string(path).unwrap();
+      let end = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .take_while(|offset| *offset <= 1 << 20)
+        .last()
+        .unwrap_or(0);
+      for pattern in known_patterns() {
+        assert_scanner_parity(&pattern, &text[..end]);
+      }
+    }
+  }
+
+  #[test]
+  fn test_custom_pattern_keeps_regex_fallback() {
+    let mut pretokenizer = PreTokenizer::new(&[], None);
+    pretokenizer.re_pat = Regex::new(r"\p{L}{1,2}|\p{N}|[^\s]").unwrap();
+    let text = "abc 你好 １２3!";
+    let mut actual = Vec::new();
+    pretokenizer
+      .for_each_pretoken(text, |token| actual.push(token))
+      .unwrap();
+    let expected = pretokenizer
+      .re_pat
+      .find_iter(text)
+      .map(|found| found.unwrap().as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
   }
 
   #[test]

@@ -25,3 +25,11 @@ cargo bench --bench regression --no-run
 cargo bench --bench regression -- suite \
   --config "$suite_config" \
   --output-dir "$output_dir"
+
+# The scan command was introduced after the initial regression protocol. Older
+# base revisions legitimately lack it, while the candidate report is required
+# by the validator once the command exists in that checkout.
+if [[ -f benches/regression/scan.rs ]]; then
+  cargo bench --bench regression -- pretokenizer-scan \
+    --output "$output_dir/pretokenizer-scan.json"
+fi

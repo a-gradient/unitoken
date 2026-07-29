@@ -10,6 +10,12 @@ const TRAINER_LABELS = new Map([
   ['smoke_zh_unicode_v1000', 'Chinese Unicode, vocab 1k'],
   ['smoke_zh_unicode_bbpe_r90_v1000', 'Chinese Unicode BBPE, vocab 1k'],
 ]);
+const SCAN_PATTERN_LABELS = new Map([
+  ['gpt2', 'GPT-2/r50k'],
+  ['cl100k', 'cl100k'],
+  ['o200k', 'o200k'],
+  ['unknown', 'unknown fallback'],
+]);
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -27,6 +33,20 @@ function average(values) {
     return null;
   }
   return valid.reduce((sum, value) => sum + value, 0) / valid.length;
+}
+
+function median(values) {
+  const valid = values
+    .map(finiteNumber)
+    .filter((value) => value !== null)
+    .sort((left, right) => left - right);
+  if (valid.length === 0) {
+    return null;
+  }
+  const middle = Math.floor(valid.length / 2);
+  return valid.length % 2 === 0
+    ? (valid[middle - 1] + valid[middle]) / 2
+    : valid[middle];
 }
 
 function loadReport(resultsDir, relativePath, contract, errors, optional) {
@@ -235,6 +255,74 @@ function pretokenizerValues(report) {
   return values;
 }
 
+function scanRows(report) {
+  const rows = new Map();
+  for (const sample of report?.samples ?? []) {
+    const patternName = sample?.request?.pattern_name;
+    const datasetName = sample?.request?.dataset_name;
+    if (
+      typeof patternName !== 'string'
+      || patternName.length === 0
+      || typeof datasetName !== 'string'
+      || datasetName.length === 0
+    ) {
+      continue;
+    }
+    const key = JSON.stringify([patternName, datasetName]);
+    let row = rows.get(key);
+    if (!row) {
+      row = {
+        patternName,
+        datasetName,
+        dispatchTimes: [],
+        fancyRegexTimes: [],
+        workloads: new Set(),
+        failed: report.gates.passed === false,
+      };
+      rows.set(key, row);
+    }
+    row.failed ||= sample?.status === 'failed' || sample?.error != null;
+    row.dispatchTimes.push(sample?.measurement?.dispatch_ns);
+    row.fancyRegexTimes.push(sample?.measurement?.fancy_regex_ns);
+    row.workloads.add(JSON.stringify(stableValue({
+      pattern: sample?.request?.pattern ?? null,
+      input_bytes: sample?.request?.input_bytes ?? null,
+      input_sha256: sample?.request?.input_sha256 ?? null,
+    })));
+  }
+  for (const row of rows.values()) {
+    row.dispatch = median(row.dispatchTimes);
+    row.fancyRegex = median(row.fancyRegexTimes);
+  }
+  return rows;
+}
+
+function unionScanRows(baseline, candidate) {
+  const rows = new Map();
+  for (const [key, row] of baseline) {
+    rows.set(key, {
+      patternName: row.patternName,
+      datasetName: row.datasetName,
+      baseline: row,
+      candidate: null,
+    });
+  }
+  for (const [key, row] of candidate) {
+    const existing = rows.get(key);
+    if (existing) {
+      existing.candidate = row;
+    } else {
+      rows.set(key, {
+        patternName: row.patternName,
+        datasetName: row.datasetName,
+        baseline: null,
+        candidate: row,
+      });
+    }
+  }
+  return [...rows.values()];
+}
+
 function codecValues(report) {
   const values = new Map();
   const samples = report?.samples ?? [];
@@ -287,6 +375,13 @@ function formatDelta(baseline, candidate) {
   }
   const delta = ((candidate - baseline) / baseline) * 100;
   return `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`;
+}
+
+function formatSpeedup(reference, dispatch) {
+  if (reference === null || dispatch === null || dispatch === 0) {
+    return 'n/a';
+  }
+  return `${(reference / dispatch).toFixed(2)}×`;
 }
 
 function tableRow(label, baseline, candidate, formatter) {
@@ -371,6 +466,38 @@ function optionalCodecTableRow(
   return `| ${label} | ${optionalReportCell(baseline, baselineValues, metric, formatter)} | ${optionalReportCell(candidate, candidateValues, metric, formatter)} | ${delta} |`;
 }
 
+function scanCell(state, row, metric) {
+  if (state.status === 'invalid') {
+    return 'unavailable';
+  }
+  if (state.status === 'absent' || !row) {
+    return 'missing';
+  }
+  return row.failed ? 'failed' : formatMilliseconds(row[metric]);
+}
+
+function scanTableRow(row, baselineState, candidateState) {
+  const baseline = row.baseline;
+  const candidate = row.candidate;
+  let delta = 'n/a';
+  if (
+    baseline
+    && candidate
+    && !baseline.failed
+    && !candidate.failed
+  ) {
+    delta = sameWorkloads(baseline, candidate)
+      ? formatDelta(baseline.dispatch, candidate.dispatch)
+      : 'changed';
+  }
+  const speedup = candidate && !candidate.failed
+    ? formatSpeedup(candidate.fancyRegex, candidate.dispatch)
+    : 'n/a';
+  const pattern = SCAN_PATTERN_LABELS.get(row.patternName) ?? row.patternName;
+  const label = escapeTableCell(`${pattern} — ${row.datasetName}`);
+  return `| ${label} | ${scanCell(baselineState, baseline, 'dispatch')} | ${scanCell(candidateState, candidate, 'dispatch')} | ${delta} | ${speedup} |`;
+}
+
 function reportSet(resultsDir, side, errors) {
   const prefix = `${side}/`;
   return {
@@ -404,6 +531,13 @@ function reportSet(resultsDir, side, errors) {
       'unitoken_codec_regression_v1',
       errors,
     ),
+    pretokenizerScan: loadReport(
+      resultsDir,
+      `${prefix}pretokenizer-scan.json`,
+      'unitoken_pretokenizer_scan_regression_v1',
+      errors,
+      side === 'baseline',
+    ),
   };
 }
 
@@ -417,17 +551,23 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     baseline.trainer !== null,
     candidate.trainer !== null,
   );
+  const scanRowsToRender = unionScanRows(
+    scanRows(baseline.pretokenizerScan.report),
+    scanRows(candidate.pretokenizerScan.report),
+  );
   const reports = [
     baseline.trainer,
     baseline.pretokenizer,
     baseline.byteCodec,
     baseline.unicodeCodec,
     baseline.bbpeUnicodeCodec.report,
+    baseline.pretokenizerScan.report,
     candidate.trainer,
     candidate.pretokenizer,
     candidate.byteCodec,
     candidate.unicodeCodec,
     candidate.bbpeUnicodeCodec.report,
+    candidate.pretokenizerScan.report,
   ].filter((report) => report !== null);
   const bbpeCodecRegression = baseline.bbpeUnicodeCodec.status === 'present'
     && candidate.bbpeUnicodeCodec.status === 'absent';
@@ -507,6 +647,23 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
         formatMilliseconds,
       ));
     }
+  }
+
+  lines.push(
+    '',
+    '### Pretokenizer pattern scan',
+    '',
+    'Median scan time over paired samples; `PR vs regex` compares normal dispatch with direct `fancy-regex` on the PR revision.',
+    '',
+    '| Pattern / corpus | Base dispatch | PR dispatch | Δ | PR vs regex |',
+    '| --- | ---: | ---: | ---: | ---: |',
+  );
+  for (const row of scanRowsToRender) {
+    lines.push(scanTableRow(
+      row,
+      baseline.pretokenizerScan,
+      candidate.pretokenizerScan,
+    ));
   }
 
   lines.push('', '<details>', '<summary>Peak RSS</summary>', '');
