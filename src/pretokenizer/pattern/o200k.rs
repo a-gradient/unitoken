@@ -27,6 +27,7 @@ pub(super) const PATTERN: &str = concat!(
 pub(super) struct O200k;
 
 impl Pattern for O200k {
+  #[inline(always)]
   fn pretoken_end<B: Backend>(
     text: &str,
     start: usize,
@@ -56,6 +57,7 @@ impl Pattern for O200k {
   }
 }
 
+#[inline]
 fn word_branch_one_end<B: Backend>(
   text: &str,
   start: usize,
@@ -64,6 +66,7 @@ fn word_branch_one_end<B: Backend>(
   match_with_optional_prefix(text, start, backend, word_branch_one_core::<B>)
 }
 
+#[inline]
 fn word_branch_two_end<B: Backend>(
   text: &str,
   start: usize,
@@ -72,6 +75,7 @@ fn word_branch_two_end<B: Backend>(
   match_with_optional_prefix(text, start, backend, word_branch_two_core::<B>)
 }
 
+#[inline]
 fn match_with_optional_prefix<B: Backend>(
   text: &str,
   start: usize,
@@ -90,6 +94,7 @@ fn match_with_optional_prefix<B: Backend>(
   matcher(text, start, backend)
 }
 
+#[inline]
 fn word_branch_one_core<B: Backend>(
   text: &str,
   start: usize,
@@ -114,6 +119,7 @@ fn word_branch_one_core<B: Backend>(
   Some(with_optional_contraction(text, end))
 }
 
+#[inline]
 fn word_branch_two_core<B: Backend>(
   text: &str,
   start: usize,
@@ -146,6 +152,7 @@ fn scan_limited_numbers(text: &str, start: usize) -> usize {
   end
 }
 
+#[inline]
 fn punctuation_end<B: Backend>(
   text: &str,
   start: usize,

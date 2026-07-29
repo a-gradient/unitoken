@@ -14,6 +14,7 @@ pub(super) const PATTERN: &str =
 pub(super) struct Cl100k;
 
 impl Pattern for Cl100k {
+  #[inline(always)]
   fn pretoken_end<B: Backend>(
     text: &str,
     start: usize,
@@ -43,6 +44,7 @@ impl Pattern for Cl100k {
   }
 }
 
+#[inline]
 fn letter_end<B: Backend>(
   text: &str,
   start: usize,
@@ -83,6 +85,7 @@ fn scan_limited_numbers(text: &str, start: usize) -> usize {
   end
 }
 
+#[inline]
 fn punctuation_end<B: Backend>(
   text: &str,
   start: usize,

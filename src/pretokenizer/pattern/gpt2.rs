@@ -22,6 +22,7 @@ pub(super) fn recognizes(pattern: &str) -> bool {
 pub(super) struct Gpt2;
 
 impl Pattern for Gpt2 {
+  #[inline(always)]
   fn pretoken_end<B: Backend>(
     text: &str,
     start: usize,

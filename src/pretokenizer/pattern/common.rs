@@ -118,6 +118,7 @@ pub(super) fn scan_while(
   end
 }
 
+#[inline]
 pub(super) fn scan_same_class_with<B: Backend>(
   text: &str,
   start: usize,
@@ -131,6 +132,7 @@ pub(super) fn scan_same_class_with<B: Backend>(
   scan_predicate(text, start, predicate_for_class(class), backend)
 }
 
+#[inline]
 pub(super) fn scan_predicate<B: Backend>(
   text: &str,
   start: usize,
