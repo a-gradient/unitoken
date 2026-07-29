@@ -1,7 +1,9 @@
-use crate::MyResult;
-
-use super::common::{
-  char_at, char_class, scan_same_class, scan_whitespace, CharClass,
+use super::{
+  backend::Backend,
+  common::{
+    char_at, char_class, scan_same_class_with, scan_whitespace, CharClass,
+  },
+  engine::Pattern,
 };
 
 pub(super) const PATTERN: &str =
@@ -17,45 +19,34 @@ pub(super) fn recognizes(pattern: &str) -> bool {
   matches!(pattern, PATTERN | LEGACY_PATTERN | R50K_PATTERN)
 }
 
-pub(super) fn for_each<'a>(
-  text: &'a str,
-  mut emit: impl FnMut(&'a str) -> MyResult<()>,
-) -> MyResult<()> {
-  let mut start = 0;
-  while start < text.len() {
-    let end = pretoken_end(text, start);
-    debug_assert!(end > start);
-    debug_assert!(text.is_char_boundary(end));
-    emit(&text[start..end])?;
-    start = end;
-  }
-  Ok(())
-}
+pub(super) struct Gpt2;
 
-fn pretoken_end(text: &str, start: usize) -> usize {
-  let bytes = text.as_bytes();
-  let contraction = if bytes[start] == b'\'' {
-    contraction_len(&bytes[start..])
-  } else {
-    None
-  };
-  if let Some(len) = contraction {
-    return start + len;
-  }
-
-  if bytes[start] == b' ' && start + 1 < bytes.len() {
-    let next_start = start + 1;
-    let class = char_class(char_at(text, next_start));
-    if class != CharClass::Whitespace {
-      return scan_same_class(text, next_start, class);
+impl Pattern for Gpt2 {
+  fn pretoken_end<B: Backend>(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let contraction = if bytes[start] == b'\'' {
+      contraction_len(&bytes[start..])
+    } else {
+      None
+    };
+    if let Some(len) = contraction {
+      return start + len;
     }
-  }
 
-  let class = char_class(char_at(text, start));
-  if class == CharClass::Whitespace {
-    return scan_whitespace(text, start);
+    if bytes[start] == b' ' && start + 1 < bytes.len() {
+      let next_start = start + 1;
+      let class = char_class(char_at(text, next_start));
+      if class != CharClass::Whitespace {
+        return scan_same_class_with::<B>(text, next_start, class);
+      }
+    }
+
+    let class = char_class(char_at(text, start));
+    if class == CharClass::Whitespace {
+      return scan_whitespace(text, start);
+    }
+    scan_same_class_with::<B>(text, start, class)
   }
-  scan_same_class(text, start, class)
 }
 
 fn contraction_len(bytes: &[u8]) -> Option<usize> {

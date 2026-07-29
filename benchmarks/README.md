@@ -62,7 +62,7 @@ Python-to-Rust prefetch require a separate source benchmark.
 
 For scan-only comparisons of the GPT-2/r50k, cl100k, o200k, and a fixed
 representative unknown pattern against direct `fancy-regex` matching on the
-checked-in English and Chinese fixtures, run:
+checked-in English and Chinese fixtures plus a synthetic 1 MiB ASCII run, run:
 
 ```bash
 cargo bench --bench bpe -- pretokenizer/scan
@@ -72,7 +72,15 @@ This microbenchmark excludes special-token routing, Unicode/vocabulary bigram
 splitting, word counting, and BPE so that it isolates PAT matching. The
 `dispatch` case exercises normal pattern selection; the unknown pattern
 therefore measures the generic fallback. Its pattern is fixed so Criterion
-results remain reproducible.
+results remain reproducible. The synthetic run covers the profitability case
+for the architecture-specific ASCII backends; normal language corpora mostly
+exercise their scalar short-run prefix.
+
+Known scanners select the backend once per input segment. AArch64 uses NEON
+when available; x86-64 uses runtime-detected AVX2 with an SSE2 baseline; other
+targets retain the scalar backend. Every vector backend first handles a short
+scalar prefix and stops before non-ASCII bytes, leaving UTF-8 and Unicode class
+semantics to the shared scalar path.
 
 The regression harness runs the same matrix with paired dispatch/reference
 ordering, exact token-stream fingerprint gates, and a machine-readable report:

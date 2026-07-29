@@ -4,6 +4,8 @@ use regex_syntax::{
   Parser,
 };
 
+use super::backend::{AsciiPredicate, Backend};
+
 lazy_static! {
   static ref CHAR_CLASSES: Box<[u8]> = unicode_class_table();
   static ref CASE_D: ClassUnicode = unicode_class(r"(?i:d)");
@@ -116,9 +118,31 @@ pub(super) fn scan_while(
   end
 }
 
-pub(super) fn scan_same_class(text: &str, start: usize, class: CharClass) -> usize {
+pub(super) fn scan_same_class_with<B: Backend>(
+  text: &str,
+  start: usize,
+  class: CharClass,
+) -> usize {
   debug_assert_ne!(class, CharClass::Whitespace);
-  scan_while(text, start, |ch| char_class(ch) == class)
+  scan_predicate::<B>(text, start, predicate_for_class(class))
+}
+
+pub(super) fn scan_predicate<B: Backend>(
+  text: &str,
+  start: usize,
+  predicate: AsciiPredicate,
+) -> usize {
+  if start == text.len() {
+    return start;
+  }
+  if !text.as_bytes()[start].is_ascii() {
+    return scan_unicode_predicate(text, start, predicate);
+  }
+  let ascii_end = B::scan_ascii(text.as_bytes(), start, predicate);
+  if ascii_end == text.len() || text.as_bytes()[ascii_end].is_ascii() {
+    return ascii_end;
+  }
+  scan_unicode_predicate(text, ascii_end, predicate)
 }
 
 pub(super) fn scan_whitespace(text: &str, start: usize) -> usize {
@@ -210,6 +234,42 @@ fn class_contains(class: &ClassUnicode, ch: char) -> bool {
       }
     })
     .is_ok()
+}
+
+#[inline]
+fn predicate_for_class(class: CharClass) -> AsciiPredicate {
+  match class {
+    CharClass::Letter => AsciiPredicate::Letter,
+    CharClass::Number => AsciiPredicate::Number,
+    CharClass::Whitespace => AsciiPredicate::Whitespace,
+    CharClass::Other => AsciiPredicate::Other,
+  }
+}
+
+#[inline]
+fn scan_unicode_predicate(
+  text: &str,
+  start: usize,
+  predicate: AsciiPredicate,
+) -> usize {
+  match predicate {
+    AsciiPredicate::Letter => scan_while(text, start, is_letter),
+    AsciiPredicate::Number => scan_while(text, start, is_number),
+    AsciiPredicate::Whitespace => scan_while(text, start, is_whitespace),
+    AsciiPredicate::Other => scan_while(text, start, is_other),
+    AsciiPredicate::Uppercase => {
+      scan_while(text, start, is_o200k_upper_or_shared)
+    }
+    AsciiPredicate::Lowercase => {
+      scan_while(text, start, is_o200k_lower_or_shared)
+    }
+    AsciiPredicate::CrLf => {
+      scan_while(text, start, |ch| matches!(ch, '\r' | '\n'))
+    }
+    AsciiPredicate::CrLfOrSlash => scan_while(text, start, |ch| {
+      matches!(ch, '\r' | '\n' | '/')
+    }),
+  }
 }
 
 fn unicode_class(pattern: &str) -> ClassUnicode {
