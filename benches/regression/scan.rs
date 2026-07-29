@@ -103,6 +103,17 @@ pub fn run(args: Args) -> Result<(), String> {
   let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
   let mut samples = Vec::new();
   let mut failures = Vec::new();
+  let mut datasets = Vec::with_capacity(DATASETS.len() + 1);
+  for (dataset_name, relative_path) in DATASETS {
+    let input_path = manifest_dir.join(relative_path);
+    let input = fixture_prefix(&input_path, args.max_bytes)?;
+    datasets.push((dataset_name, input_path, input));
+  }
+  datasets.push((
+    "long_ascii",
+    PathBuf::from("<generated:long_ascii>"),
+    "a".repeat(args.max_bytes),
+  ));
 
   for (pattern_name, pattern) in PATTERNS {
     let has_scalar_control = pattern != UNKNOWN_PAT_STR;
@@ -111,12 +122,10 @@ pub fn run(args: Args) -> Result<(), String> {
     let reference = Regex::new(pattern)
       .map_err(|error| format!("cannot compile {pattern_name}: {error}"))?;
 
-    for (dataset_name, relative_path) in DATASETS {
-      let input_path = manifest_dir.join(relative_path);
-      let input = fixture_prefix(&input_path, args.max_bytes)?;
+    for (dataset_name, input_path, input) in &datasets {
       let input_sha256 = sha256_hex(input.as_bytes());
-      let dispatch_fingerprint = fingerprint_dispatch(&pretokenizer, &input)?;
-      let reference_fingerprint = fingerprint_reference(&reference, &input)?;
+      let dispatch_fingerprint = fingerprint_dispatch(&pretokenizer, input)?;
+      let reference_fingerprint = fingerprint_reference(&reference, input)?;
 
       if dispatch_fingerprint != reference_fingerprint {
         let message = format!(
@@ -128,8 +137,8 @@ pub fn run(args: Args) -> Result<(), String> {
             pattern_name,
             pattern,
             dataset_name,
-            &input_path,
-            &input,
+            input_path,
+            input,
             &input_sha256,
             0,
           ),
@@ -146,7 +155,7 @@ pub fn run(args: Args) -> Result<(), String> {
       #[cfg(feature = "benchmark-internals")]
       if has_scalar_control {
         let scalar_fingerprint =
-          fingerprint_scalar(&pretokenizer, &input)?;
+          fingerprint_scalar(&pretokenizer, input)?;
         if dispatch_fingerprint != scalar_fingerprint {
           let message = format!(
             "{pattern_name}/{dataset_name} native and scalar token boundaries differ"
@@ -157,8 +166,8 @@ pub fn run(args: Args) -> Result<(), String> {
               pattern_name,
               pattern,
               dataset_name,
-              &input_path,
-              &input,
+              input_path,
+              input,
               &input_sha256,
               0,
             ),
@@ -173,18 +182,18 @@ pub fn run(args: Args) -> Result<(), String> {
         }
       }
 
-      time_dispatch(&pretokenizer, &input)?;
+      time_dispatch(&pretokenizer, input)?;
       #[cfg(feature = "benchmark-internals")]
       if has_scalar_control {
-        time_scalar(&pretokenizer, &input)?;
+        time_scalar(&pretokenizer, input)?;
       }
-      time_reference(&reference, &input)?;
+      time_reference(&reference, input)?;
 
       for sample_index in 0..args.repeats {
         let (dispatch_ns, scalar_ns, fancy_regex_ns) = time_sample(
           &pretokenizer,
           &reference,
-          &input,
+          input,
           sample_index,
           has_scalar_control,
         )?;
@@ -193,8 +202,8 @@ pub fn run(args: Args) -> Result<(), String> {
             pattern_name,
             pattern,
             dataset_name,
-            &input_path,
-            &input,
+            input_path,
+            input,
             &input_sha256,
             sample_index,
           ),
@@ -471,7 +480,11 @@ impl TokenFingerprintBuilder {
 fn print_summary(path: &Path, report: &ScanReport) {
   println!("pretokenizer scan report: {}", path.display());
   for (pattern_name, _) in PATTERNS {
-    for (dataset_name, _) in DATASETS {
+    for dataset_name in DATASETS
+      .map(|(dataset_name, _)| dataset_name)
+      .into_iter()
+      .chain(std::iter::once("long_ascii"))
+    {
       let matching = report.samples.iter().filter(|sample| {
         sample.request.pattern_name == pattern_name
           && sample.request.dataset_name == dataset_name
