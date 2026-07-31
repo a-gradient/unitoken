@@ -1,20 +1,19 @@
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
+
 use regex_syntax::{
   hir::{Class, ClassUnicode, HirKind},
   Parser,
 };
 
-lazy_static! {
-  static ref CHAR_CLASSES: Box<[u8]> = unicode_class_table();
-  static ref CASE_D: ClassUnicode = unicode_class(r"(?i:d)");
-  static ref CASE_E: ClassUnicode = unicode_class(r"(?i:e)");
-  static ref CASE_L: ClassUnicode = unicode_class(r"(?i:l)");
-  static ref CASE_M: ClassUnicode = unicode_class(r"(?i:m)");
-  static ref CASE_R: ClassUnicode = unicode_class(r"(?i:r)");
-  static ref CASE_S: ClassUnicode = unicode_class(r"(?i:s)");
-  static ref CASE_T: ClassUnicode = unicode_class(r"(?i:t)");
-  static ref CASE_V: ClassUnicode = unicode_class(r"(?i:v)");
-}
+static CHAR_CLASSES: LazyLock<Box<[u8]>> = LazyLock::new(unicode_class_table);
+static CASE_D: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:d)"));
+static CASE_E: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:e)"));
+static CASE_L: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:l)"));
+static CASE_M: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:m)"));
+static CASE_R: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:r)"));
+static CASE_S: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:s)"));
+static CASE_T: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:t)"));
+static CASE_V: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:v)"));
 
 const LETTER: u8 = 1 << 0;
 const NUMBER: u8 = 1 << 1;

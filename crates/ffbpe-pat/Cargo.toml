@@ -1,0 +1,21 @@
+[package]
+name = "ffbpe-pat"
+version = "0.1.0"
+edition = "2024"
+description = "Specialized, zero-copy scanners for common tokenizer PAT expressions"
+repository = "https://github.com/tokn-ai/ffbpe"
+readme = "README.md"
+license = "MIT"
+keywords = ["tokenizer", "pretokenizer", "tiktoken"]
+categories = ["text-processing"]
+
+[dependencies]
+regex-syntax = "0.8.8"
+
+[dev-dependencies]
+criterion = "0.5.1"
+fancy-regex = "0.16.2"
+
+[[bench]]
+name = "scan"
+harness = false
