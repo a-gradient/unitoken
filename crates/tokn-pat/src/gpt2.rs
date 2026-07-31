@@ -1,5 +1,3 @@
-use crate::MyResult;
-
 use super::common::{
   char_at, char_class, scan_same_class, scan_whitespace, CharClass,
 };
@@ -13,26 +11,7 @@ pub(super) const LEGACY_PATTERN: &str =
 pub(super) const R50K_PATTERN: &str =
   r"'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s";
 
-pub(super) fn recognizes(pattern: &str) -> bool {
-  matches!(pattern, PATTERN | LEGACY_PATTERN | R50K_PATTERN)
-}
-
-pub(super) fn for_each<'a>(
-  text: &'a str,
-  mut emit: impl FnMut(&'a str) -> MyResult<()>,
-) -> MyResult<()> {
-  let mut start = 0;
-  while start < text.len() {
-    let end = pretoken_end(text, start);
-    debug_assert!(end > start);
-    debug_assert!(text.is_char_boundary(end));
-    emit(&text[start..end])?;
-    start = end;
-  }
-  Ok(())
-}
-
-fn pretoken_end(text: &str, start: usize) -> usize {
+pub(super) fn pretoken_end(text: &str, start: usize) -> usize {
   let bytes = text.as_bytes();
   let contraction = if bytes[start] == b'\'' {
     contraction_len(&bytes[start..])

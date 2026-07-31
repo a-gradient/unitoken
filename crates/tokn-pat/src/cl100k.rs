@@ -1,5 +1,3 @@
-use crate::MyResult;
-
 use super::common::{
   case_insensitive_contraction_end, char_at, is_letter, is_number, is_other,
   is_whitespace, next_boundary, scan_through_last_newline, scan_whitespace,
@@ -9,22 +7,7 @@ use super::common::{
 pub(super) const PATTERN: &str =
   r"'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s";
 
-pub(super) fn for_each<'a>(
-  text: &'a str,
-  mut emit: impl FnMut(&'a str) -> MyResult<()>,
-) -> MyResult<()> {
-  let mut start = 0;
-  while start < text.len() {
-    let end = pretoken_end(text, start);
-    debug_assert!(end > start);
-    debug_assert!(text.is_char_boundary(end));
-    emit(&text[start..end])?;
-    start = end;
-  }
-  Ok(())
-}
-
-fn pretoken_end(text: &str, start: usize) -> usize {
+pub(super) fn pretoken_end(text: &str, start: usize) -> usize {
   if let Some(end) = case_insensitive_contraction_end(text, start) {
     return end;
   }

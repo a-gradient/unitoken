@@ -74,6 +74,13 @@ splitting, word counting, and BPE so that it isolates PAT matching. The
 therefore measures the generic fallback. Its pattern is fixed so Criterion
 results remain reproducible.
 
+The dedicated `tokn-pat` crate also owns a standalone specialized-versus-regex
+benchmark over generated English, Chinese, and mixed-script inputs:
+
+```bash
+cargo bench -p tokn-pat --bench scan
+```
+
 The regression harness runs the same matrix with paired dispatch/reference
 ordering, exact token-stream fingerprint gates, and a machine-readable report:
 

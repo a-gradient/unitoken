@@ -15,8 +15,7 @@ use crate::{
   bigram::VocabBigramIndex,
   bpe::Freq,
 };
-
-mod pattern;
+use tokn_pat::Pattern as KnownPattern;
 
 /// Unicode bigrams retained by a frequency selection and its effective boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,14 +28,12 @@ pub struct UnicodeBigramSelection {
   pub max_excluded_freq: Option<Freq>,
 }
 
-/// Original GPT-2 pretokenizer pattern used when no pattern is configured.
-pub const DEFAULT_PAT_STR: &str = pattern::GPT2_PATTERN;
-/// Canonical tiktoken GPT-2/r50k/p50k pretokenizer pattern.
-pub const R50K_PAT_STR: &str = pattern::R50K_PATTERN;
-/// Canonical tiktoken cl100k pretokenizer pattern.
-pub const CL100K_PAT_STR: &str = pattern::CL100K_PATTERN;
-/// Canonical tiktoken o200k pretokenizer pattern.
-pub const O200K_PAT_STR: &str = pattern::O200K_PATTERN;
+pub use tokn_pat::{
+  CL100K_PATTERN as CL100K_PAT_STR,
+  GPT2_PATTERN as DEFAULT_PAT_STR,
+  O200K_PATTERN as O200K_PAT_STR,
+  R50K_PATTERN as R50K_PAT_STR,
+};
 
 lazy_static! {
   /// Compiled fallback and correctness oracle for [`DEFAULT_PAT_STR`].
@@ -477,8 +474,11 @@ fn for_each_pattern_pretoken<'a>(
   pat: &Regex,
   mut emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> MyResult<()> {
-  if let Some(result) = pattern::for_each_known(s, pat.as_str(), &mut emit) {
-    return result;
+  if let Some(pattern) = KnownPattern::recognize(pat.as_str()) {
+    for token in pattern.split(s) {
+      emit(token)?;
+    }
+    return Ok(());
   }
   for found in pat.find_iter(s) {
     let token = found?.as_str();
@@ -979,14 +979,10 @@ mod tests {
   }
 
   fn fast_tokens<'a>(pattern: &Regex, text: &'a str) -> Vec<&'a str> {
-    let mut tokens = Vec::new();
-    pattern::for_each_known(text, pattern.as_str(), |token| {
-      tokens.push(token);
-      Ok(())
-    })
-    .expect("test pattern must have a specialized scanner")
-    .unwrap();
-    tokens
+    KnownPattern::recognize(pattern.as_str())
+      .expect("test pattern must have a specialized scanner")
+      .split(text)
+      .collect()
   }
 
   fn assert_scanner_parity(pattern: &Regex, text: &str) {
@@ -1128,70 +1124,6 @@ mod tests {
     .into_iter()
     .collect::<BTreeMap<_, _>>();
     assert_eq!(tokens, expected_tokens);
-  }
-
-  #[test]
-  fn test_known_scanners_match_regex_on_edge_cases() {
-    for text in [
-      "",
-      "Hello, world! It's 2024.",
-      "'s'd'm't'll've're",
-      "'S'LL'Ve'RE'ſ",
-      "a  b   c    ",
-      "a\t b\r\nc\u{A0}\u{2003}d",
-      "你好，世界！Now是2024年。",
-      "한글かなカナ mixed العربية १२३",
-      "e\u{301} café 👩‍💻🏳️‍🌈",
-      "lower UPPER TitleCase HTTPServer ABC中文def",
-      "a1 12 123 1234 １２３４",
-      "a\r\nb\n\nc\r\r\nd trailing \t  ",
-      "²¼ⅠⅫ⑴",
-      "<|endoftext|>before<|endoftext|>after",
-      " punctuation...?!—–_+=/\\\"'s ",
-    ] {
-      for pattern in known_patterns() {
-        assert_scanner_parity(&pattern, text);
-      }
-    }
-  }
-
-  #[test]
-  fn test_known_scanners_match_regex_on_deterministic_unicode_mix() {
-    const ALPHABET: &[char] = &[
-      'a', 'Z', '0', '9', '\'', ' ', '\t', '\n', '\r', ',', '—', '你', '界', '한', '글',
-      'か', 'ナ', 'é', '\u{301}', '\u{A0}', '\u{2003}', '²', 'Ⅻ', '👩', '\u{200D}', '💻',
-    ];
-    let mut state = 0x4d59_5df4_d0f3_3173_u64;
-    let mut text = String::new();
-    for _ in 0..20_000 {
-      state = state
-        .wrapping_mul(6_364_136_223_846_793_005)
-        .wrapping_add(1_442_695_040_888_963_407);
-      text.push(ALPHABET[(state as usize) % ALPHABET.len()]);
-    }
-    for pattern in known_patterns() {
-      assert_scanner_parity(&pattern, &text);
-    }
-  }
-
-  #[test]
-  fn test_known_scanners_match_regex_on_unicode_scalar_sample() {
-    let mut state = 0xa076_1d64_78bd_642f_u64;
-    let mut text = String::new();
-    let mut count = 0;
-    while count < 50_000 {
-      state ^= state >> 12;
-      state ^= state << 25;
-      state ^= state >> 27;
-      let value = (state.wrapping_mul(0x2545_f491_4f6c_dd1d) % 0x11_0000) as u32;
-      if let Some(ch) = char::from_u32(value) {
-        text.push(ch);
-        count += 1;
-      }
-    }
-    for pattern in known_patterns() {
-      assert_scanner_parity(&pattern, &text);
-    }
   }
 
   #[test]
