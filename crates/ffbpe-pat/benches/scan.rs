@@ -3,7 +3,7 @@ use criterion::{
   Throughput,
 };
 use fancy_regex::Regex;
-use tokn_pat::Pattern;
+use ffbpe_pat::Pattern;
 
 fn bench_scan(c: &mut Criterion) {
   let datasets = [

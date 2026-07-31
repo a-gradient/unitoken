@@ -313,7 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The same program is available as `examples/quickstart.rs` and compiled in CI.
 
 Known GPT-2, r50k, cl100k, and o200k PAT expressions are implemented by the
-workspace's [`tokn-pat`](crates/tokn-pat) crate. It can also be used directly
+workspace's [`ffbpe-pat`](crates/ffbpe-pat) crate. It can also be used directly
 when an application needs only zero-copy pretoken ranges or borrowed tokens;
 arbitrary patterns continue through FFBPE's regex fallback.
 
@@ -345,8 +345,8 @@ Useful entry points:
 
 - `python examples/quickstart.py`
 - `cargo run --example quickstart`
-- `cargo test -p tokn-pat`
-- `cargo bench -p tokn-pat --bench scan`
+- `cargo test -p ffbpe-pat`
+- `cargo bench -p ffbpe-pat --bench scan`
 - `python benchmarks/compare_tiktoken.py`
 - `python benchmarks/compare_hf_training.py`
 - `cargo bench --bench regression -- suite smoke`

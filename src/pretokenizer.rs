@@ -15,7 +15,7 @@ use crate::{
   bigram::VocabBigramIndex,
   bpe::Freq,
 };
-use tokn_pat::Pattern as KnownPattern;
+use ffbpe_pat::Pattern as KnownPattern;
 
 /// Unicode bigrams retained by a frequency selection and its effective boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub struct UnicodeBigramSelection {
   pub max_excluded_freq: Option<Freq>,
 }
 
-pub use tokn_pat::{
+pub use ffbpe_pat::{
   CL100K_PATTERN as CL100K_PAT_STR,
   GPT2_PATTERN as DEFAULT_PAT_STR,
   O200K_PATTERN as O200K_PAT_STR,
