@@ -46,6 +46,9 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    resolve: {
+      dedupe: ["@tokn-ai/ffbpe"],
+    },
     server: {
       fs: { allow: [repositoryRoot] },
       ...(isCodexSeatbeltSandbox

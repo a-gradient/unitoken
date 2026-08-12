@@ -10,6 +10,7 @@ import type {
   PreTokenizerOptions,
   SourceBatchOptions,
   TextFile,
+  TiktokenSpecialToken,
   TrainerMemoryUsage,
   Runtime,
   TrainBpeOptions,
@@ -550,6 +551,25 @@ export class BpeEncoder {
 
   static fromSerialized(vocab: string, merges: string, options: BpeEncoderOptions = {}): BpeEncoder {
     return BpeEncoder.fromRaw(wasm().WasmBpeEncoder.fromFiles(vocab, merges, encoderOptions(options)))
+  }
+
+  static fromTiktoken(
+    model: string,
+    special_tokens: readonly TiktokenSpecialToken[] = [],
+    options: BpeEncoderOptions = {},
+  ): BpeEncoder {
+    const normalized_special_tokens = special_tokens.map(token => {
+      unsignedInteger(token.id, `special token id for ${JSON.stringify(token.text)}`, 0xffff_ffff)
+      return { text: token.text, id: token.id }
+    })
+    return BpeEncoder.fromRaw(wasm().WasmBpeEncoder.fromTiktoken(
+      model,
+      normalized_special_tokens,
+      encoderOptions({
+        ...options,
+        special_tokens: normalized_special_tokens.map(token => token.text),
+      }),
+    ))
   }
 
   static async load(

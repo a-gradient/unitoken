@@ -51,6 +51,16 @@ const encoder = await BpeEncoder.load(vocabFile, mergesFile)
 const ids = await encoder.encodeFile(textFile)
 ```
 
+Load a ranked `.tiktoken` asset directly when building custom preset tooling:
+
+```ts
+const encoder = BpeEncoder.fromTiktoken(modelText, [
+  { text: "<|endoftext|>", id: 100_257 },
+], { pat_str })
+```
+
+For named, verified common encodings, prefer `@tokn-ai/ffbpe-presets`.
+
 The browser adapter currently reads each `File`/`Blob` into memory. Native
 Python file chunking and segment offsets are intentionally not simulated in
 the first WASM package.

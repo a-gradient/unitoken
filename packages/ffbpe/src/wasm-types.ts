@@ -81,5 +81,6 @@ export interface WasmModule {
   WasmBpeEncoder: {
     fromData(vocab: Array<[number[], number]>, merges: Array<[number[], number[]]>, options: object): RawBpeEncoder
     fromFiles(vocab: string, merges: string, options: object): RawBpeEncoder
+    fromTiktoken(model: string, special_tokens: object[], options: object): RawBpeEncoder
   }
 }

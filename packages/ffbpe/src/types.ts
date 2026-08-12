@@ -27,6 +27,11 @@ export interface BpeEncoderOptions extends PreTokenizerOptions {
   split_on_vocab_bigrams?: boolean
 }
 
+export interface TiktokenSpecialToken {
+  text: string
+  id: number
+}
+
 export interface BpeTrainerOptions {
   unit?: Unit
   initial_alphabet?: InitialAlphabet

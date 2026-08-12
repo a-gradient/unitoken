@@ -16,6 +16,7 @@ wasm-opt = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+base64 = "0.22.1"
 ffbpe = { path = "../..", default-features = false }
 js-sys = "0.3.103"
 serde = { version = "1.0.228", features = ["derive"] }

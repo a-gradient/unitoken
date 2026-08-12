@@ -1,17 +1,18 @@
 "use client";
 
-import { FFBPE, trainBpe, type BpeEncoder } from "@tokn-ai/ffbpe/browser";
+import { FFBPE, type BpeEncoder } from "@tokn-ai/ffbpe/browser";
 import { inspect, type Inspection } from "@tokn-ai/ffbpe-inspect";
+import {
+  TOKENIZER_PRESETS,
+  getPreset,
+  loadPreset,
+  type TokenizerPreset,
+} from "@tokn-ai/ffbpe-presets";
 import { useEffect, useMemo, useState } from "react";
 
 const SPECIAL_TOKEN = "<|endoftext|>";
-const DEMO_CORPUS = [
-  "Tokenizers do not read words. They build reusable pieces.",
-  "A fast byte pair encoder merges the most useful neighbors.",
-  "Hello tokenizer! Hello world! token token tokenizer.",
-  "你好，世界。机器学习让文字变成数字。",
-  `Documents can end here ${SPECIAL_TOKEN} and begin again.`,
-].join("\n");
+const DEFAULT_PRESET: TokenizerPreset = "cl100k_base";
+const encoder_promises = new Map<TokenizerPreset, Promise<BpeEncoder>>();
 
 const EXAMPLES = [
   {
@@ -40,9 +41,26 @@ function tokenLabel(text: string | null, byte_hex: string): string {
   return visibleText(text);
 }
 
+function presetEncoder(name: TokenizerPreset): Promise<BpeEncoder> {
+  const cached = encoder_promises.get(name);
+  if (cached !== undefined) return cached;
+  const loading = loadPreset(name, {
+    model_url: new URL(`/models/${name}.tiktoken`, location.href),
+  }).catch(error => {
+    encoder_promises.delete(name);
+    throw error;
+  });
+  encoder_promises.set(name, loading);
+  return loading;
+}
+
 export default function Home() {
   const [text, setText] = useState(EXAMPLES[0].text);
-  const [encoder, setEncoder] = useState<BpeEncoder | null>(null);
+  const [selected_preset, setSelectedPreset] = useState<TokenizerPreset>(DEFAULT_PRESET);
+  const [loaded_encoder, setLoadedEncoder] = useState<{
+    name: TokenizerPreset;
+    encoder: BpeEncoder;
+  } | null>(null);
   const [init_error, setInitError] = useState<string | null>(null);
   const [active_pretoken, setActivePretoken] = useState(0);
   const [active_token, setActiveToken] = useState<number | null>(null);
@@ -50,12 +68,11 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
     FFBPE.init()
-      .then(() => trainBpe(DEMO_CORPUS, {
-        vocab_size: 340,
-        special_tokens: [SPECIAL_TOKEN],
-      }).encoder())
+      .then(() => presetEncoder(selected_preset))
       .then(next_encoder => {
-        if (!cancelled) setEncoder(next_encoder);
+        if (!cancelled) {
+          setLoadedEncoder({ name: selected_preset, encoder: next_encoder });
+        }
       })
       .catch(reason => {
         if (!cancelled) {
@@ -65,7 +82,12 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selected_preset]);
+
+  const encoder = loaded_encoder?.name === selected_preset
+    ? loaded_encoder.encoder
+    : null;
+  const selected_definition = getPreset(selected_preset);
 
   const inspection = useMemo<{ result: Inspection | null; error: string | null }>(() => {
     if (encoder === null) return { result: null, error: null };
@@ -101,7 +123,7 @@ export default function Home() {
         </a>
         <div className="nav-note">
           <span className="live-dot" aria-hidden="true" />
-          WASM · LOCAL · NO DATA LEAVES THIS TAB
+          WASM · LOCAL MODELS · NO DATA LEAVES THIS TAB
         </div>
         <a className="github-link" href="https://github.com/tokn-ai/ffbpe">
           GitHub <span aria-hidden="true">↗</span>
@@ -113,7 +135,8 @@ export default function Home() {
         <h1>See what your<br /><em>tokenizer</em> sees.</h1>
         <p className="lede">
           Text is split twice: first into linguistic chunks, then into learned
-          BPE tokens. Change the text and watch both layers line up.
+          BPE tokens. Choose a production tokenizer, change the text, and watch
+          both layers line up.
         </p>
         <div className="hero-arrow" aria-hidden="true">↓</div>
       </section>
@@ -124,17 +147,38 @@ export default function Home() {
             <span className="step-kicker">INPUT</span>
             <h2>Give it something interesting.</h2>
           </div>
-          <div className="examples" aria-label="Text examples">
-            {EXAMPLES.map(example => (
-              <button
-                className={text === example.text ? "example active" : "example"}
-                key={example.label}
-                onClick={() => selectExample(example.text)}
-                type="button"
+          <div className="input-controls">
+            <label className="preset-picker">
+              <span>TOKENIZER PRESET</span>
+              <select
+                value={selected_preset}
+                onChange={event => {
+                  setSelectedPreset(event.target.value as TokenizerPreset);
+                  setInitError(null);
+                  setActivePretoken(0);
+                  setActiveToken(null);
+                }}
               >
-                {example.label}
-              </button>
-            ))}
+                {TOKENIZER_PRESETS.map(preset => (
+                  <option key={preset.name} value={preset.name}>
+                    {preset.display_name} · {preset.vocab_size.toLocaleString()} vocab
+                  </option>
+                ))}
+              </select>
+              <small>{selected_definition.description}</small>
+            </label>
+            <div className="examples" aria-label="Text examples">
+              {EXAMPLES.map(example => (
+                <button
+                  className={text === example.text ? "example active" : "example"}
+                  key={example.label}
+                  onClick={() => selectExample(example.text)}
+                  type="button"
+                >
+                  {example.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <label className="input-wrap">
@@ -156,13 +200,15 @@ export default function Home() {
           <p className="error" role="alert">Could not inspect this text: {error}</p>
         ) : result === null ? (
           <div className="loading" role="status">
-            <span /> Loading the tokenizer into your browser…
+            <span /> Downloading and verifying {selected_definition.display_name} in your browser…
           </div>
         ) : (
           <>
             <div className="pipeline-heading">
               <span>THE PIPELINE</span>
               <div className="stats">
+                <b>{selected_definition.display_name}</b>
+                <i />
                 <strong>{result.pretoken_count}</strong> PRETOKENS
                 <i />
                 <strong>{result.token_count}</strong> TOKENS

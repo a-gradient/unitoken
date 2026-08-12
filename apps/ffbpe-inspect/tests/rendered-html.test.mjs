@@ -24,6 +24,7 @@ test("server-renders the inspector shell", async () => {
   assert.match(html, /FFBPE Inspect/);
   assert.match(html, /See what your/);
   assert.match(html, /tokenizer/);
-  assert.match(html, /Loading the tokenizer into your browser/);
+  assert.match(html, /TOKENIZER PRESET/);
+  assert.match(html, /Downloading and verifying .*cl100k_base/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

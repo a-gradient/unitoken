@@ -192,3 +192,20 @@ test("public APIs reject incompatible formats and invalid token ids", () => {
     /Out of vocabulary idx/,
   )
 })
+
+test("tiktoken models load ranked merges and explicit special-token ids", () => {
+  const model = Array.from({ length: 256 }, (_, rank) => {
+    return `${Buffer.from([rank]).toString("base64")} ${rank}`
+  })
+  model.push(
+    `${Buffer.from("ab").toString("base64")} 256`,
+    `${Buffer.from("abc").toString("base64")} 257`,
+  )
+  const encoder = BpeEncoder.fromTiktoken(
+    model.join("\n"),
+    [{ text: "<special>", id: 1000 }],
+  )
+
+  assert.deepEqual([...encoder.encode("abc<special>")], [257, 1000])
+  assert.equal(encoder.decode([257, 1000]), "abc<special>")
+})

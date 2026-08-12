@@ -83,6 +83,23 @@ await FFBPE.init()
 const model = trainBpe("hello tokenizer", { vocab_size: 270 })
 ```
 
+Load a common tokenizer lazily with the companion preset package:
+
+```bash
+npm install @tokn-ai/ffbpe @tokn-ai/ffbpe-presets
+```
+
+```ts
+import { FFBPE } from "@tokn-ai/ffbpe"
+import { loadPreset } from "@tokn-ai/ffbpe-presets"
+
+await FFBPE.init()
+const encoder = await loadPreset("cl100k_base")
+```
+
+Presets include only metadata in the npm package. The selected official model
+asset is downloaded on demand and verified before it is converted in memory.
+
 The npm package uses filesystem paths in Node and `File`/`Blob` objects in the
 browser. See [`packages/ffbpe/README.md`](packages/ffbpe/README.md) for the full
 runtime-specific API.
