@@ -1,0 +1,7 @@
+src/
+test/
+scripts/
+tsconfig.json
+pnpm-lock.yaml
+!wasm/
+!wasm/**
