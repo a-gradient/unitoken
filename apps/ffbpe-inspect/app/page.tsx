@@ -115,7 +115,7 @@ export default function Home() {
   }
 
   return (
-    <main>
+    <main id="top">
       <nav className="topbar" aria-label="Primary navigation">
         <a className="brand" href="#top" aria-label="FFBPE Inspect home">
           <span className="brand-mark"><b>FF</b><i>/</i><b>BPE</b></span>
@@ -129,17 +129,6 @@ export default function Home() {
           GitHub <span aria-hidden="true">↗</span>
         </a>
       </nav>
-
-      <section className="hero" id="top">
-        <p className="eyebrow">TOKENIZATION, WITHOUT THE BLACK BOX</p>
-        <h1>See what your<br /><em>tokenizer</em> sees.</h1>
-        <p className="lede">
-          Text is split twice: first into linguistic chunks, then into learned
-          BPE tokens. Choose a production tokenizer, change the text, and watch
-          both layers line up.
-        </p>
-        <div className="hero-arrow" aria-hidden="true">↓</div>
-      </section>
 
       <section className="workbench" aria-label="Tokenizer inspector">
         <div className="input-header">
@@ -318,32 +307,6 @@ export default function Home() {
           </>
         )}
       </section>
-
-      <section className="explainer">
-        <div className="explainer-title">
-          <span>WHY TWO STEPS?</span>
-          <h2>Boundaries first.<br />Compression second.</h2>
-        </div>
-        <ol>
-          <li>
-            <b>01</b>
-            <div><strong>Pretokenization</strong><p>Keeps spaces, punctuation, scripts, and special tokens in sensible chunks.</p></div>
-          </li>
-          <li>
-            <b>02</b>
-            <div><strong>BPE encoding</strong><p>Applies learned merges inside each chunk and emits compact vocabulary IDs.</p></div>
-          </li>
-          <li>
-            <b>03</b>
-            <div><strong>Exact bytes</strong><p>Every color traces back to a UTF-8 byte range, even when a token is only a byte fragment.</p></div>
-          </li>
-        </ol>
-      </section>
-
-      <footer>
-        <span>FFBPE INSPECT · RUNS ENTIRELY IN YOUR BROWSER</span>
-        <span>BUILT WITH RUST + WEBASSEMBLY</span>
-      </footer>
     </main>
   );
 }

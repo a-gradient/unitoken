@@ -12,18 +12,18 @@ export async function generateMetadata(): Promise<Metadata> {
   const image_url = new URL("/og.png", `${protocol}://${host}`).href;
 
   return {
-    title: "FFBPE Inspect — See what your tokenizer sees",
+    title: "FFBPE Inspect — Pretokenizer and BPE explorer",
     description:
       "An interactive view of how FFBPE turns text into pretokens, then BPE tokens.",
     openGraph: {
       title: "FFBPE Inspect",
-      description: "See what your tokenizer sees.",
+      description: "Explore pretokenizer boundaries and BPE tokens in your browser.",
       images: [{ url: image_url, width: 1536, height: 1024 }],
     },
     twitter: {
       card: "summary_large_image",
       title: "FFBPE Inspect",
-      description: "See what your tokenizer sees.",
+      description: "Explore pretokenizer boundaries and BPE tokens in your browser.",
       images: [image_url],
     },
   };

@@ -22,9 +22,9 @@ test("server-renders the inspector shell", async () => {
 
   const html = await response.text();
   assert.match(html, /FFBPE Inspect/);
-  assert.match(html, /See what your/);
-  assert.match(html, /tokenizer/);
+  assert.match(html, /FF<\/b><i>\/<\/i><b>BPE/);
   assert.match(html, /TOKENIZER PRESET/);
   assert.match(html, /Downloading and verifying .*cl100k_base/);
+  assert.doesNotMatch(html, /See what your|WHY TWO STEPS|Boundaries first|RUNS ENTIRELY/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
