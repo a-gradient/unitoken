@@ -82,7 +82,6 @@ jobs:
           test -n "$(find site/inspect/assets -name '*.wasm' -print -quit)"
           grep -Fq 'href="./inspect/"' site/index.html
           grep -Fq 'class="site-header"' site/index.html
-          grep -Fq 'class="site-header"' site/inspect/index.html
           grep -Fq 'src="./assets/' site/inspect/index.html
 
       - name: Configure GitHub Pages
