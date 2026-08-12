@@ -1,6 +1,6 @@
 [package]
 name = "ffbpe-wasm"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 description = "WebAssembly bindings for FFBPE"
 repository = "https://github.com/tokn-ai/ffbpe"

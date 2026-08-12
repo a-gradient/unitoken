@@ -79,8 +79,10 @@ which read or write files return promises.
 
 The initial package includes `PreTokenizer`, `BigramCounter`, `WordCounter`,
 `BpeTrainer`, `BpeModel`, `BpeEncoder`, and `trainBpe`. Python APIs tied to
-NumPy, native streaming iterators, or chunk-boundary inspection are not exposed
-in the browser package.
+NumPy or native streaming iterators are not exposed in the browser package.
+`PreTokenizer.split` returns ordered logical pretokens with UTF-8 byte offsets,
+and `BpeEncoder.tokenBytes` returns the exact bytes for one vocabulary id. These
+low-level methods support companion tooling such as `@tokn-ai/ffbpe-inspect`.
 
 ## Build from source
 

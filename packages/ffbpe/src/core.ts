@@ -6,6 +6,7 @@ import type {
   HotPairWindowStats,
   ModelConfig,
   PretrainedFiles,
+  PreTokenSpan,
   PreTokenizerOptions,
   SourceBatchOptions,
   TextFile,
@@ -173,6 +174,11 @@ export class PreTokenizer {
 
   getWords(text: string): WordFrequencies {
     return this.inner.getWords(text)
+  }
+
+  /** Return ordered logical pretokens with UTF-8 byte offsets. */
+  split(text: string): PreTokenSpan[] {
+    return this.inner.split(text)
   }
 
   bigramCounter(): BigramCounter {
@@ -596,6 +602,12 @@ export class BpeEncoder {
 
   encode(text: string): Uint32Array {
     return this.inner.encode(text)
+  }
+
+  /** Return the exact vocabulary bytes represented by a token id. */
+  tokenBytes(id: number): Uint8Array {
+    unsignedInteger(id, "token id", 0xffff_ffff)
+    return this.inner.tokenBytes(id)
   }
 
   async encodeFile(file: string | URL | Blob): Promise<Uint32Array> {

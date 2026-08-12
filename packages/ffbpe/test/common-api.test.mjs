@@ -31,6 +31,11 @@ test("pretokenizer keeps special tokens indivisible and out of word counts", () 
     pretokenizer.withUnicodeBigrams(["你好"]).getWords("你好世界"),
     { "世": 1, "你好": 1, "界": 1 },
   )
+  assert.deepEqual(pretokenizer.split("a<|endoftext|>你"), [
+    { kind: "word", text: "a", start_byte: 0, end_byte: 1 },
+    { kind: "special", text: "<|endoftext|>", start_byte: 1, end_byte: 14 },
+    { kind: "word", text: "你", start_byte: 14, end_byte: 17 },
+  ])
 })
 
 test("bigram counters add, batch, merge, and retain cutoff ties", () => {
@@ -140,6 +145,10 @@ test("models cache their default encoder and route special tokens", () => {
     "hello<|endoftext|>world",
   )
   assert.equal(encoder.preTokenizer().getWords("hello").hello, 1)
+  assert.deepEqual(
+    [...encoder.tokenBytes(encoder.encode("hello")[0])],
+    [...new TextEncoder().encode(encoder.decode([encoder.encode("hello")[0]]))],
+  )
 })
 
 test("serialized models restore inferred special tokens and batch encoding", () => {

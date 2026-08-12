@@ -10,13 +10,13 @@ use ffbpe::{
   },
   counter::{BigramCounter as CoreBigramCounter, WordCounter as CoreWordCounter},
   pretokenizer::{
-    PreTokenizer as CorePreTokenizer, UnicodeBigramMixedBoundary,
+    PreTokenPiece, PreTokenizer as CorePreTokenizer, UnicodeBigramMixedBoundary,
     parse_unicode_bigrams, unicode_bigram_to_string,
   },
   spec::{Spec, gpt2::Gpt2Spec, unitoken::UnitokenSpec},
   traits::{CanEncode, Encode as _, Train as _},
 };
-use js_sys::Uint32Array;
+use js_sys::{Uint8Array, Uint32Array};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -99,6 +99,14 @@ pub struct WasmPreTokenizer {
   inner: CorePreTokenizer,
 }
 
+#[derive(Serialize)]
+struct PreTokenSpan<'a> {
+  kind: &'static str,
+  text: &'a str,
+  start_byte: usize,
+  end_byte: usize,
+}
+
 #[wasm_bindgen]
 impl WasmPreTokenizer {
   #[wasm_bindgen(constructor)]
@@ -127,6 +135,27 @@ impl WasmPreTokenizer {
       parse_unicode_bigrams(&bigrams).map_err(js_error)?,
     );
     Ok(Self { inner })
+  }
+
+  /// Return ordered spans from the complete pretokenization pipeline.
+  pub fn split(&self, text: &str) -> Result<JsValue, JsValue> {
+    let input_start = text.as_ptr() as usize;
+    let mut spans = Vec::new();
+    self.inner.for_each_logical_piece(text, |piece| {
+      let piece_text = piece.text();
+      let start_byte = (piece_text.as_ptr() as usize).saturating_sub(input_start);
+      spans.push(PreTokenSpan {
+        kind: match piece {
+          PreTokenPiece::Special(_) => "special",
+          PreTokenPiece::Word(_) => "word",
+        },
+        text: piece_text,
+        start_byte,
+        end_byte: start_byte + piece_text.len(),
+      });
+      Ok(())
+    }).map_err(js_error)?;
+    to_js(&spans)
   }
 
   #[wasm_bindgen(js_name = getWords)]
@@ -757,6 +786,16 @@ impl WasmBpeEncoder {
       EncoderInner::Unicode(encoder) => encoder.encode_string(text),
     }.map_err(js_error)?;
     Ok(Uint32Array::from(ids.as_slice()))
+  }
+
+  #[wasm_bindgen(js_name = tokenBytes)]
+  pub fn token_bytes(&self, id: Idx) -> Result<Uint8Array, JsValue> {
+    let bytes = match &self.inner {
+      EncoderInner::Byte(encoder) => encoder.decode_vocab_bytes.get(id as usize),
+      EncoderInner::Unicode(encoder) => encoder.decode_vocab_bytes.get(id as usize),
+    }.filter(|bytes| !bytes.is_empty())
+      .ok_or_else(|| js_error(MyError::OovIdx(id as u64)))?;
+    Ok(Uint8Array::from(bytes.as_ref()))
   }
 
   pub fn decode(&self, ids: Vec<Idx>) -> Result<String, JsValue> {

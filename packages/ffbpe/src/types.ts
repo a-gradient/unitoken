@@ -11,6 +11,15 @@ export interface PreTokenizerOptions {
   unicode_bigram_mixed_boundary?: UnicodeBigramMixedBoundary
 }
 
+export type PreTokenKind = "word" | "special"
+
+export interface PreTokenSpan {
+  kind: PreTokenKind
+  text: string
+  start_byte: number
+  end_byte: number
+}
+
 export interface BpeEncoderOptions extends PreTokenizerOptions {
   unit?: Unit
   format?: FileFormat | null

@@ -2,6 +2,12 @@ export interface RawPreTokenizer {
   free(): void
   withUnicodeBigrams(bigrams: string[]): RawPreTokenizer
   getWords(text: string): Record<string, number>
+  split(text: string): Array<{
+    kind: "word" | "special"
+    text: string
+    start_byte: number
+    end_byte: number
+  }>
   bigramCounter(): RawBigramCounter
   wordCounter(): RawWordCounter
   loadWordCounter(serialized: string): RawWordCounter
@@ -36,6 +42,7 @@ export interface RawBpeEncoder {
   encodeWord(word: string): Uint32Array
   encodeWords(words: string[]): number[][]
   encode(text: string): Uint32Array
+  tokenBytes(id: number): Uint8Array
   decode(ids: number[]): string
 }
 

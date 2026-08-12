@@ -1,6 +1,6 @@
 {
   "name": "@tokn-ai/ffbpe",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "FFBPE for JavaScript and WebAssembly",
   "type": "module",
   "types": "./dist/index.d.ts",
