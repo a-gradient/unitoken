@@ -18,3 +18,7 @@ npm run dev
 ```
 
 Use `npm test` to run the production build and server-rendering smoke test.
+
+Use `npm run build:pages` to emit the relocatable static application used by
+GitHub Pages. The Pages workflow publishes it below the main site at
+`/ffbpe/inspect/`.

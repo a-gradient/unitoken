@@ -23,10 +23,42 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install wasm-pack and pnpm
+        run: |
+          cargo install wasm-pack --locked --version 0.13.0
+          npm install --global pnpm@10
+
+      - name: Build inspector packages
+        run: |
+          pnpm --dir packages/ffbpe install --frozen-lockfile
+          pnpm --dir packages/ffbpe build
+          pnpm --dir packages/ffbpe-inspect install --frozen-lockfile
+          pnpm --dir packages/ffbpe-inspect build
+          pnpm --dir packages/ffbpe-presets install --frozen-lockfile
+          pnpm --dir packages/ffbpe-presets build
+
+      - name: Build inspector website
+        run: |
+          npm --prefix apps/ffbpe-inspect ci --ignore-scripts --no-audit --no-fund
+          npm --prefix apps/ffbpe-inspect run build:pages
+
       - name: Stage landing page
         run: |
           mkdir -p site
           cp -R landing/. site/
+          mkdir -p site/inspect
+          cp -R apps/ffbpe-inspect/dist-pages/. site/inspect/
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -44,6 +76,11 @@ jobs:
         run: |
           test -f site/index.html
           test -f site/docs/index.html
+          test -f site/inspect/index.html
+          test -f site/inspect/models/cl100k_base.tiktoken
+          test -n "$(find site/inspect/assets -name '*.wasm' -print -quit)"
+          grep -Fq 'href="./inspect/"' site/index.html
+          grep -Fq 'src="./assets/' site/inspect/index.html
 
       - name: Configure GitHub Pages
         if: github.event_name != 'pull_request'
