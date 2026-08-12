@@ -7,7 +7,7 @@ import {
   BpeEncoder,
   BpeModel,
   BpeTrainer,
-  FFBPE,
+  FFBPE as CoreFFBPE,
   PreTokenizer,
   WordCounter,
   trainBpe,
@@ -49,7 +49,14 @@ const node_runtime: NodeRuntime = {
   },
 }
 
-FFBPE.configureRuntime(node_runtime)
+class FFBPE {
+  private constructor() {}
+
+  static async init(): Promise<void> {
+    CoreFFBPE.configureRuntime(node_runtime)
+    await CoreFFBPE.init()
+  }
+}
 
 export {
   BigramCounter,

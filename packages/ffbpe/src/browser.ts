@@ -3,7 +3,7 @@ import {
   BpeEncoder,
   BpeModel,
   BpeTrainer,
-  FFBPE,
+  FFBPE as CoreFFBPE,
   PreTokenizer,
   WordCounter,
   trainBpe,
@@ -34,7 +34,14 @@ const browser_runtime: BrowserRuntime = {
   },
 }
 
-FFBPE.configureRuntime(browser_runtime)
+class FFBPE {
+  private constructor() {}
+
+  static async init(): Promise<void> {
+    CoreFFBPE.configureRuntime(browser_runtime)
+    await CoreFFBPE.init()
+  }
+}
 
 export {
   BigramCounter,
