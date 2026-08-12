@@ -45,7 +45,7 @@ function presetEncoder(name: TokenizerPreset): Promise<BpeEncoder> {
   const cached = encoder_promises.get(name);
   if (cached !== undefined) return cached;
   const loading = loadPreset(name, {
-    model_url: new URL(`/models/${name}.tiktoken`, location.href),
+    model_url: new URL(`models/${name}.tiktoken`, location.href),
   }).catch(error => {
     encoder_promises.delete(name);
     throw error;
