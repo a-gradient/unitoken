@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import test from "node:test";
 
 async function render() {
@@ -36,4 +37,16 @@ test("builds a relocatable GitHub Pages app", async () => {
   assert.match(html, /FFBPE Inspect/);
   assert.match(html, /(?:src|href)="\.\/assets\//);
   assert.doesNotMatch(html, /(?:src|href)="\/(?:assets|models)\//);
+});
+
+test("static app bundles one configured FFBPE runtime", async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL("../dist-pages/.vite/manifest.json", import.meta.url), "utf8"),
+  );
+  const entry = Object.values(manifest).find(chunk => chunk.isEntry === true);
+
+  assert.ok(entry, "missing static app entry in Vite manifest");
+  const source = await readFile(resolve("dist-pages", entry.file), "utf8");
+  assert.equal(source.match(/No FFBPE runtime configured/g)?.length, 1);
+  assert.equal(source.match(/wasm_input/g)?.length, 1);
 });
