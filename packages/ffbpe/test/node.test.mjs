@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import test from "node:test"
 
 import {
@@ -34,13 +35,16 @@ test("Node file helpers accept paths and preserve counters", async () => {
   const counter_file = join(directory, "words.json")
   await writeFile(text_file, "ab a", "utf8")
 
+  const text_url = pathToFileURL(text_file)
+  const counter_url = pathToFileURL(counter_file)
+
   const pretokenizer = new PreTokenizer([], { pat_str: "[^\\s]" })
-  assert.deepEqual(await pretokenizer.getWordsFromFile(text_file), { a: 2, b: 1 })
+  assert.deepEqual(await pretokenizer.getWordsFromFile(text_url), { a: 2, b: 1 })
 
   const counter = new WordCounter(pretokenizer)
   counter.addSource(["ab", "a"], { max_records: 1, max_bytes: 2 })
-  await counter.save(counter_file)
-  assert.deepEqual((await pretokenizer.loadWordCounter(counter_file)).words(), { a: 2, b: 1 })
+  await counter.save(counter_url)
+  assert.deepEqual((await pretokenizer.loadWordCounter(counter_url)).words(), { a: 2, b: 1 })
 })
 
 test("serialized data produces deterministic merge ids", () => {
@@ -106,4 +110,48 @@ test("pretrained Node directory round trip", async () => {
   assert.equal(encoder.decode(ids), "hello")
   assert.equal(JSON.parse(await readFile(join(directory, "ffbpe.json"), "utf8")).version, 1)
   assert.match(await readFile(join(directory, "explicit-vocab.json"), "utf8"), /^\{/)
+})
+
+test("Node loads explicit model files and encodes file URLs", async () => {
+  const model = trainBpe("hello from a file", { vocab_size: 274 })
+  const files = model.toPretrainedFiles()
+  const directory = await mkdtemp(join(tmpdir(), "ffbpe-explicit-"))
+  const vocab_file = join(directory, "vocab.json")
+  const merges_file = join(directory, "merges.txt")
+  const text_file = join(directory, "input.txt")
+
+  await Promise.all([
+    writeFile(vocab_file, files["vocab.json"], "utf8"),
+    writeFile(merges_file, files["merges.txt"], "utf8"),
+    writeFile(text_file, "hello from a file", "utf8"),
+  ])
+
+  const encoder = await BpeEncoder.load(
+    pathToFileURL(vocab_file),
+    pathToFileURL(merges_file),
+  )
+  const ids = await encoder.encodeFile(pathToFileURL(text_file))
+
+  assert.equal(encoder.decode(ids), "hello from a file")
+})
+
+test("pretrained config rejects model files outside the directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ffbpe-unsafe-config-"))
+  await writeFile(join(directory, "ffbpe.json"), JSON.stringify({
+    version: 1,
+    unit: "byte",
+    format: "gpt2",
+    vocab_file: "../vocab.json",
+    merges_file: "merges.txt",
+    special_tokens: [],
+    pat_str: null,
+    unicode_bigrams: null,
+    unicode_bigram_mixed_boundary: "keep",
+    split_on_vocab_bigrams: true,
+  }), "utf8")
+
+  await assert.rejects(
+    BpeEncoder.fromPretrained(directory),
+    /Invalid FFBPE model config field 'vocab_file'/,
+  )
 })

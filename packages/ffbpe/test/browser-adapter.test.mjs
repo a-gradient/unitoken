@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
-import { readFile } from "node:fs/promises"
-import { fileURLToPath } from "node:url"
+import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import test from "node:test"
 
 const native_fetch = globalThis.fetch
@@ -18,10 +20,16 @@ const {
   BpeEncoder,
   FFBPE,
   PreTokenizer,
+  WordCounter,
   trainBpe,
 } = await import("../dist/browser.js")
 
 await FFBPE.init()
+
+test("browser initialization is idempotent", async () => {
+  await FFBPE.init()
+  assert.deepEqual(new PreTokenizer([]).getWords("browser"), { browser: 1 })
+})
 
 test("browser file helpers accept Blob inputs", async () => {
   const corpus = new Blob(["ab a"])
@@ -52,4 +60,41 @@ test("browser save output stays in memory", () => {
   assert.equal(JSON.parse(files["ffbpe.json"]).version, 1)
   assert.match(files["vocab.json"], /^\{/)
   assert.ok(files["merges.txt"].length > 0)
+})
+
+test("browser pretrained loading fetches a hosted model directory", async () => {
+  const files = trainBpe("hosted browser model", { vocab_size: 275 }).toPretrainedFiles()
+  const directory = await mkdtemp(join(tmpdir(), "ffbpe-browser-model-"))
+  await Promise.all(Object.entries(files).map(([file_name, content]) => (
+    writeFile(join(directory, file_name), content, "utf8")
+  )))
+
+  const base_url = pathToFileURL(`${directory}/`)
+  const encoder = await BpeEncoder.fromPretrained(base_url)
+  const ids = encoder.encode("hosted browser model")
+
+  assert.equal(encoder.decode(ids), "hosted browser model")
+})
+
+test("browser file APIs reject paths and filesystem writes", async () => {
+  const pretokenizer = new PreTokenizer([])
+  const counter = new WordCounter(pretokenizer)
+  const model = trainBpe("browser only", { vocab_size: 268 })
+
+  await assert.rejects(
+    pretokenizer.getWordsFromFile("corpus.txt"),
+    /expect a File or Blob/,
+  )
+  await assert.rejects(
+    counter.save("words.json"),
+    /only available in the Node runtime/,
+  )
+  await assert.rejects(
+    model.savePretrained("model"),
+    /only available in the Node runtime/,
+  )
+  await assert.rejects(
+    model.saveVocabJson("vocab.json"),
+    /only available in the Node runtime/,
+  )
 })
