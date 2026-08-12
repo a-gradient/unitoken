@@ -1,0 +1,60 @@
+{
+  "name": "@tokn-ai/ffbpe",
+  "version": "0.1.8",
+  "description": "FFBPE for JavaScript and WebAssembly",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "main": "./dist/node.js",
+  "module": "./dist/browser.js",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "wasm",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.js",
+      "node": "./dist/node.js",
+      "default": "./dist/browser.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    }
+  },
+  "scripts": {
+    "build:wasm": "wasm-pack build ../../crates/ffbpe-wasm --target web --release --out-dir ../../packages/ffbpe/wasm --out-name ffbpe_wasm && node scripts/finalize-wasm.mjs",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "pnpm run build:wasm && pnpm run build:ts",
+    "prepack": "pnpm run build",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tokn-ai/ffbpe.git"
+  },
+  "keywords": [
+    "tokenizer",
+    "bpe",
+    "wasm",
+    "nlp"
+  ]
+}

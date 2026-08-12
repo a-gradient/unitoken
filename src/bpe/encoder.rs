@@ -1,8 +1,57 @@
-use std::{collections::{BTreeMap, BTreeSet, HashMap}, io::BufWriter, path::Path};
+use std::{collections::{BTreeMap, BTreeSet, HashMap}, io::{BufWriter, Read}, path::Path};
+#[cfg(target_arch = "wasm32")]
+use std::{borrow::Borrow, hash::Hash};
 use std::collections::hash_map::Entry;
 
 use ahash::AHashSet;
-use moka::sync::Cache;
+#[cfg(not(target_arch = "wasm32"))]
+pub type EncoderCache<K, V> = moka::sync::Cache<K, V>;
+
+/// Single-thread-safe encoder cache for targets without a monotonic clock.
+///
+/// Moka relies on `std::time::Instant`, which is unavailable on
+/// `wasm32-unknown-unknown`. Browser builds use this bounded map instead.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+pub struct EncoderCache<K, V> {
+  inner: std::sync::Arc<std::sync::RwLock<HashMap<K, V>>>,
+  max_capacity: usize,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl<K, V> EncoderCache<K, V>
+where
+  K: Eq + Hash + Clone,
+  V: Clone,
+{
+  pub fn new(max_capacity: u64) -> Self {
+    Self {
+      inner: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
+      max_capacity: max_capacity.min(usize::MAX as u64) as usize,
+    }
+  }
+
+  pub fn get<Q>(&self, key: &Q) -> Option<V>
+  where
+    K: Borrow<Q>,
+    Q: Eq + Hash + ?Sized,
+  {
+    self.inner.read().unwrap().get(key).cloned()
+  }
+
+  pub fn insert(&self, key: K, value: V) {
+    if self.max_capacity == 0 {
+      return;
+    }
+    let mut entries = self.inner.write().unwrap();
+    if entries.len() >= self.max_capacity && !entries.contains_key(&key)
+      && let Some(evicted) = entries.keys().next().cloned()
+    {
+      entries.remove(&evicted);
+    }
+    entries.insert(key, value);
+  }
+}
 use npyz::WriterBuilder;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator as _};
 
@@ -233,6 +282,14 @@ impl<S> Default for BpeBuilder<S> {
 }
 
 impl BpeBuilder {
+  /// Load a vocabulary from `reader` using `spec` and store it in this builder.
+  pub fn load_vocab_reader<C: CharSplit, SPEC: Spec<C, Idx> + ?Sized>(
+    self, mut reader: impl Read, spec: &SPEC,
+  ) -> MyResult<Self> {
+    spec.decode_vocab(&mut reader)
+      .map(|vocab| self.set_vocab_c(vocab))
+  }
+
   #[must_use]
   /// Set the vocabulary from a `Word<C>` representation.
   pub fn set_vocab_c<C: CharSplit>(self, vocab: BTreeMap<Idx, Word<C>>) -> Self {
@@ -242,23 +299,27 @@ impl BpeBuilder {
     }
   }
 
-  #[must_use]
   /// Load a vocab file using `spec` and store it in this builder.
   pub fn load_vocab_file<C: CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
     let file = std::fs::File::open(filename)?;
-    spec.decode_vocab(&mut std::io::BufReader::new(file))
-      .map(|vocab| self.set_vocab_c(vocab))
+    self.load_vocab_reader(std::io::BufReader::new(file), spec)
   }
 
-  #[must_use]
-  /// Load a merges file using `spec` and store it as raw merges in this builder.
-  pub fn load_merges_file<C: Clone + CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
-    let file = std::fs::File::open(filename)?;
-    let merges = spec.decode_merges_raw(&mut std::io::BufReader::new(file))?;
+  /// Load merge rules from `reader` using `spec` and store them in this builder.
+  pub fn load_merges_reader<C: Clone + CharSplit, SPEC: Spec<C, Idx> + ?Sized>(
+    self, mut reader: impl Read, spec: &SPEC,
+  ) -> MyResult<Self> {
+    let merges = spec.decode_merges_raw(&mut reader)?;
     let merges_raw = merges.into_iter()
       .map(|m| (CharSplit::to_vec_u8(&m.content.0), CharSplit::to_vec_u8(&m.content.1)))
       .collect::<Vec<_>>();
     Ok(self.set_merges_raw(merges_raw))
+  }
+
+  /// Load a merges file using `spec` and store it as raw merges in this builder.
+  pub fn load_merges_file<C: Clone + CharSplit, SPEC: Spec<C, Idx> + ?Sized>(self, filename: impl AsRef<Path>, spec: &SPEC) -> MyResult<Self> {
+    let file = std::fs::File::open(filename)?;
+    self.load_merges_reader(std::io::BufReader::new(file), spec)
   }
 
   #[must_use]
@@ -316,7 +377,7 @@ pub struct BpeEncoder<C = u8> {
   /// with [`occurs_in={0}`](MergeData::occurs_in), in order to handle first word in [`Self::_encode_word`].
   pub pre_merge_map: HashMap<(Idx, Idx), Merge<C, Idx>>,
   /// Cache of already-pretokenized words.
-  pub cache: Cache<String, Word<Idx>>,
+  pub cache: EncoderCache<String, Word<Idx>>,
   can_batch_encode: bool,
 }
 
@@ -511,7 +572,7 @@ where
       pre_merge_map,
       special_tokens,
       pre_tokenizer,
-      cache: Cache::new(max_cap),
+      cache: EncoderCache::new(max_cap),
       can_batch_encode: capabilities.can_batch_encode,
     })
   }
@@ -755,7 +816,7 @@ where
   /// This is mainly useful for warm-starting an encoder when encoding large corpora.
   pub fn with_cache(mut self, cache: OrderMap<String, Arc<[Idx]>>) -> Self {
     let max_cap = cache.len() as u64 * 3 / 2;
-    self.cache = Cache::new(max_cap);
+    self.cache = EncoderCache::new(max_cap);
     for (k, v) in cache {
       self.cache.insert(k, v);
     }
@@ -1463,7 +1524,7 @@ mod tests {
     let input: BTreeMap<String, Freq> = serde_json::from_str(&std::fs::read_to_string(format!("fixtures/_words.{NAME}.json")).unwrap()).unwrap();
     let input = input.iter().map(|(k, _)| k).collect::<Vec<_>>();
     let mut bpe = _setup_bpe(NAME, &Gpt2Spec);
-    bpe.cache = Cache::new(input.len() as u64 * 6 / 5);
+    bpe.cache = EncoderCache::new(input.len() as u64 * 6 / 5);
     let result1 = bpe.encode_words_impl(&input).unwrap();
     let result2 = bpe.encode_words_impl(&input).unwrap();
     assert_eq!(result1, result2);

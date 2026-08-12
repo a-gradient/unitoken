@@ -14,3 +14,7 @@ merges.txt
 vocab.json
 merges.*.txt
 vocab.*.json
+
+packages/ffbpe/wasm/
+packages/ffbpe/dist/
+packages/ffbpe/node_modules/

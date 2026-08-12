@@ -70,6 +70,23 @@ Python 3.11 or newer:
 pip install ffbpe
 ```
 
+JavaScript (Node or browser, backed by WebAssembly):
+
+```bash
+npm install @tokn-ai/ffbpe
+```
+
+```ts
+import { FFBPE, trainBpe } from "@tokn-ai/ffbpe"
+
+await FFBPE.init()
+const model = trainBpe("hello tokenizer", { vocab_size: 270 })
+```
+
+The npm package uses filesystem paths in Node and `File`/`Blob` objects in the
+browser. See [`packages/ffbpe/README.md`](packages/ffbpe/README.md) for the full
+runtime-specific API.
+
 Rust:
 
 ```bash

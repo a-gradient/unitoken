@@ -75,3 +75,37 @@ jobs:
 
       - name: Run Python quickstart
         run: uv run python examples/quickstart.py
+
+  wasm-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install wasm-pack and pnpm
+        run: |
+          cargo install wasm-pack --locked --version 0.13.0
+          npm install --global pnpm@10
+
+      - name: Install npm package dependencies
+        working-directory: packages/ffbpe
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and test npm package
+        working-directory: packages/ffbpe
+        run: |
+          pnpm build
+          pnpm test
+          npm pack --dry-run --ignore-scripts
