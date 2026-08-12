@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "ffbpe"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
 repository = "https://github.com/tokn-ai/ffbpe"

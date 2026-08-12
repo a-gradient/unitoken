@@ -51,6 +51,16 @@ const encoder = await BpeEncoder.load(vocabFile, mergesFile)
 const ids = await encoder.encodeFile(textFile)
 ```
 
+Load a ranked `.tiktoken` asset directly when building custom preset tooling:
+
+```ts
+const encoder = BpeEncoder.fromTiktoken(modelText, [
+  { text: "<|endoftext|>", id: 100_257 },
+], { pat_str })
+```
+
+For named, verified common encodings, prefer `@tokn-ai/ffbpe-presets`.
+
 The browser adapter currently reads each `File`/`Blob` into memory. Native
 Python file chunking and segment offsets are intentionally not simulated in
 the first WASM package.
@@ -79,8 +89,10 @@ which read or write files return promises.
 
 The initial package includes `PreTokenizer`, `BigramCounter`, `WordCounter`,
 `BpeTrainer`, `BpeModel`, `BpeEncoder`, and `trainBpe`. Python APIs tied to
-NumPy, native streaming iterators, or chunk-boundary inspection are not exposed
-in the browser package.
+NumPy or native streaming iterators are not exposed in the browser package.
+`PreTokenizer.split` returns ordered logical pretokens with UTF-8 byte offsets,
+and `BpeEncoder.tokenBytes` returns the exact bytes for one vocabulary id. These
+low-level methods support companion tooling such as `@tokn-ai/ffbpe-inspect`.
 
 ## Build from source
 

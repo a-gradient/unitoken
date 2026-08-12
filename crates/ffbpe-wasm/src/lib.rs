@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ffbpe::{
   MyError, MyResult,
   bpe::{
@@ -10,13 +11,13 @@ use ffbpe::{
   },
   counter::{BigramCounter as CoreBigramCounter, WordCounter as CoreWordCounter},
   pretokenizer::{
-    PreTokenizer as CorePreTokenizer, UnicodeBigramMixedBoundary,
+    PreTokenPiece, PreTokenizer as CorePreTokenizer, UnicodeBigramMixedBoundary,
     parse_unicode_bigrams, unicode_bigram_to_string,
   },
   spec::{Spec, gpt2::Gpt2Spec, unitoken::UnitokenSpec},
   traits::{CanEncode, Encode as _, Train as _},
 };
-use js_sys::Uint32Array;
+use js_sys::{Uint8Array, Uint32Array};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -99,6 +100,14 @@ pub struct WasmPreTokenizer {
   inner: CorePreTokenizer,
 }
 
+#[derive(Serialize)]
+struct PreTokenSpan<'a> {
+  kind: &'static str,
+  text: &'a str,
+  start_byte: usize,
+  end_byte: usize,
+}
+
 #[wasm_bindgen]
 impl WasmPreTokenizer {
   #[wasm_bindgen(constructor)]
@@ -127,6 +136,27 @@ impl WasmPreTokenizer {
       parse_unicode_bigrams(&bigrams).map_err(js_error)?,
     );
     Ok(Self { inner })
+  }
+
+  /// Return ordered spans from the complete pretokenization pipeline.
+  pub fn split(&self, text: &str) -> Result<JsValue, JsValue> {
+    let input_start = text.as_ptr() as usize;
+    let mut spans = Vec::new();
+    self.inner.for_each_logical_piece(text, |piece| {
+      let piece_text = piece.text();
+      let start_byte = (piece_text.as_ptr() as usize).saturating_sub(input_start);
+      spans.push(PreTokenSpan {
+        kind: match piece {
+          PreTokenPiece::Special(_) => "special",
+          PreTokenPiece::Word(_) => "word",
+        },
+        text: piece_text,
+        start_byte,
+        end_byte: start_byte + piece_text.len(),
+      });
+      Ok(())
+    }).map_err(js_error)?;
+    to_js(&spans)
   }
 
   #[wasm_bindgen(js_name = getWords)]
@@ -582,6 +612,12 @@ struct EncoderOptions {
   split_on_vocab_bigrams: bool,
 }
 
+#[derive(Clone, Deserialize)]
+struct TiktokenSpecialToken {
+  text: String,
+  id: Idx,
+}
+
 impl Default for EncoderOptions {
   fn default() -> Self {
     Self {
@@ -662,6 +698,136 @@ where
   )
 }
 
+fn parse_tiktoken_ranks(model: &str) -> MyResult<Vec<(Vec<u8>, Idx)>> {
+  let mut entries = Vec::new();
+  let mut ranks = std::collections::BTreeSet::new();
+  let mut tokens = std::collections::BTreeSet::new();
+  let mut byte_tokens = [false; 256];
+  for (line_index, raw_line) in model.lines().enumerate() {
+    let line = raw_line.trim();
+    if line.is_empty() {
+      continue;
+    }
+    let mut fields = line.split_whitespace();
+    let token = fields.next().ok_or_else(|| MyError::SpecError(format!(
+      "Invalid tiktoken model line {}", line_index + 1,
+    )))?;
+    let rank = fields.next().ok_or_else(|| MyError::SpecError(format!(
+      "Invalid tiktoken model line {}", line_index + 1,
+    )))?;
+    if fields.next().is_some() {
+      return Err(MyError::SpecError(format!(
+        "Invalid tiktoken model line {}", line_index + 1,
+      )));
+    }
+    let bytes = BASE64.decode(token).map_err(|error| MyError::SpecError(format!(
+      "Invalid base64 token on tiktoken line {}: {error}", line_index + 1,
+    )))?;
+    if bytes.is_empty() {
+      return Err(MyError::SpecError(format!(
+        "Empty token on tiktoken line {}", line_index + 1,
+      )));
+    }
+    let rank = rank.parse::<Idx>().map_err(|error| MyError::SpecError(format!(
+      "Invalid token rank on tiktoken line {}: {error}", line_index + 1,
+    )))?;
+    if !ranks.insert(rank) {
+      return Err(MyError::SpecError(format!("Duplicate token rank {rank} in tiktoken model")));
+    }
+    if !tokens.insert(bytes.clone()) {
+      return Err(MyError::SpecError(format!(
+        "Duplicate token bytes on tiktoken line {}", line_index + 1,
+      )));
+    }
+    if bytes.len() == 1 {
+      byte_tokens[bytes[0] as usize] = true;
+    }
+    entries.push((bytes, rank));
+  }
+  if let Some(byte) = byte_tokens.iter().position(|present| !present) {
+    return Err(MyError::SpecError(format!(
+      "Tiktoken model is missing the single-byte token 0x{byte:02x}",
+    )));
+  }
+  entries.sort_unstable_by_key(|(_, rank)| *rank);
+  Ok(entries)
+}
+
+fn derive_tiktoken_merges(
+  entries: &[(Vec<u8>, Idx)],
+) -> MyResult<Vec<(Vec<u8>, Vec<u8>)>> {
+  let ranks = entries.iter().cloned().collect::<HashMap<_, _>>();
+  let mut merges = Vec::with_capacity(entries.len().saturating_sub(256));
+  for (bytes, rank) in entries {
+    if bytes.len() == 1 {
+      continue;
+    }
+    let mut parts = bytes.iter().map(|byte| vec![*byte]).collect::<Vec<_>>();
+    loop {
+      let best = parts.windows(2).enumerate().filter_map(|(index, pair)| {
+        let mut merged = pair[0].clone();
+        merged.extend_from_slice(&pair[1]);
+        let merge_rank = ranks.get(&merged)?;
+        (*merge_rank < *rank).then_some((*merge_rank, index))
+      }).min_by_key(|(merge_rank, _)| *merge_rank);
+      let Some((_, index)) = best else {
+        break;
+      };
+      let right = parts.remove(index + 1);
+      parts[index].extend(right);
+    }
+    if parts.len() != 2 {
+      return Err(MyError::SpecError(format!(
+        "Token rank {rank} cannot be derived from earlier mergeable ranks",
+      )));
+    }
+    merges.push((parts.remove(0), parts.remove(0)));
+  }
+  Ok(merges)
+}
+
+fn build_encoder_from_tiktoken<C>(
+  model: &str,
+  special_tokens: &[TiktokenSpecialToken],
+  options: &EncoderOptions,
+  spec: &dyn Spec<C, Idx>,
+) -> MyResult<CoreBpeEncoder<C>>
+where
+  CoreBpeEncoder<C>: CanEncode<C, Idx>,
+  C: Clone,
+{
+  let mut entries = parse_tiktoken_ranks(model)?;
+  let merges = derive_tiktoken_merges(&entries)?;
+  let mut used_ids = entries.iter().map(|(_, rank)| *rank).collect::<std::collections::BTreeSet<_>>();
+  let mut used_tokens = entries.iter().map(|(bytes, _)| bytes.clone()).collect::<std::collections::BTreeSet<_>>();
+  for special in special_tokens {
+    if !used_ids.insert(special.id) {
+      return Err(MyError::SpecError(format!(
+        "Special token id {} is already mergeable", special.id,
+      )));
+    }
+    let bytes = special.text.as_bytes().to_vec();
+    if !used_tokens.insert(bytes.clone()) {
+      return Err(MyError::SpecError(format!(
+        "Special token {} is already mergeable", special.text,
+      )));
+    }
+    entries.push((bytes, special.id));
+  }
+  let vocab = entries.into_iter().map(|(bytes, rank)| (rank, bytes)).collect();
+  let builder = BpeBuilder::new()
+    .set_vocab(vocab)
+    .set_merges_raw(merges)
+    .set_special_tokens(Some(special_tokens.iter().map(|token| token.text.clone()).collect()))
+    .set_pat_str(options.pat_str.clone())
+    .set_split_on_vocab_bigrams(options.split_on_vocab_bigrams);
+  configure_encoder(
+    builder.build(spec)?,
+    options.unicode_bigrams.as_deref(),
+    &options.unicode_bigram_mixed_boundary,
+  )
+}
+
 #[wasm_bindgen]
 pub struct WasmBpeEncoder {
   inner: EncoderInner,
@@ -712,6 +878,22 @@ impl WasmBpeEncoder {
     Ok(Self { inner })
   }
 
+  #[wasm_bindgen(js_name = fromTiktoken)]
+  pub fn from_tiktoken(
+    model: &str, special_tokens: JsValue, options: JsValue,
+  ) -> Result<WasmBpeEncoder, JsValue> {
+    let special_tokens: Vec<TiktokenSpecialToken> = from_js(special_tokens)?;
+    let options: EncoderOptions = from_js(options)?;
+    let format = options.format().map_err(js_error)?;
+    if options.unit != "byte" || format != "gpt2" {
+      return Err(js_error("Tiktoken models require unit=byte and format=gpt2"));
+    }
+    let inner = EncoderInner::Byte(build_encoder_from_tiktoken(
+      model, &special_tokens, &options, &Gpt2Spec,
+    ).map_err(js_error)?);
+    Ok(Self { inner })
+  }
+
   #[wasm_bindgen(getter)]
   pub fn unit(&self) -> String {
     match self.inner {
@@ -757,6 +939,16 @@ impl WasmBpeEncoder {
       EncoderInner::Unicode(encoder) => encoder.encode_string(text),
     }.map_err(js_error)?;
     Ok(Uint32Array::from(ids.as_slice()))
+  }
+
+  #[wasm_bindgen(js_name = tokenBytes)]
+  pub fn token_bytes(&self, id: Idx) -> Result<Uint8Array, JsValue> {
+    let bytes = match &self.inner {
+      EncoderInner::Byte(encoder) => encoder.decode_vocab_bytes.get(id as usize),
+      EncoderInner::Unicode(encoder) => encoder.decode_vocab_bytes.get(id as usize),
+    }.filter(|bytes| !bytes.is_empty())
+      .ok_or_else(|| js_error(MyError::OovIdx(id as u64)))?;
+    Ok(Uint8Array::from(bytes.as_ref()))
   }
 
   pub fn decode(&self, ids: Vec<Idx>) -> Result<String, JsValue> {

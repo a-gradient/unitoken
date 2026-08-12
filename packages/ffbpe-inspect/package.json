@@ -1,0 +1,51 @@
+{
+  "name": "@tokn-ai/ffbpe-inspect",
+  "version": "0.1.0",
+  "description": "Inspection data for visualizing FFBPE pretokenization and tokenization",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "test": "node --test test/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@tokn-ai/ffbpe": ">=0.1.9 <0.2.0"
+  },
+  "devDependencies": {
+    "@tokn-ai/ffbpe": "file:../ffbpe",
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tokn-ai/ffbpe.git"
+  },
+  "keywords": [
+    "tokenizer",
+    "bpe",
+    "visualization",
+    "inspect"
+  ]
+}

@@ -11,11 +11,25 @@ export interface PreTokenizerOptions {
   unicode_bigram_mixed_boundary?: UnicodeBigramMixedBoundary
 }
 
+export type PreTokenKind = "word" | "special"
+
+export interface PreTokenSpan {
+  kind: PreTokenKind
+  text: string
+  start_byte: number
+  end_byte: number
+}
+
 export interface BpeEncoderOptions extends PreTokenizerOptions {
   unit?: Unit
   format?: FileFormat | null
   special_tokens?: readonly string[]
   split_on_vocab_bigrams?: boolean
+}
+
+export interface TiktokenSpecialToken {
+  text: string
+  id: number
 }
 
 export interface BpeTrainerOptions {

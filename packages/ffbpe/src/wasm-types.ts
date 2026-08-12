@@ -2,6 +2,12 @@ export interface RawPreTokenizer {
   free(): void
   withUnicodeBigrams(bigrams: string[]): RawPreTokenizer
   getWords(text: string): Record<string, number>
+  split(text: string): Array<{
+    kind: "word" | "special"
+    text: string
+    start_byte: number
+    end_byte: number
+  }>
   bigramCounter(): RawBigramCounter
   wordCounter(): RawWordCounter
   loadWordCounter(serialized: string): RawWordCounter
@@ -36,6 +42,7 @@ export interface RawBpeEncoder {
   encodeWord(word: string): Uint32Array
   encodeWords(words: string[]): number[][]
   encode(text: string): Uint32Array
+  tokenBytes(id: number): Uint8Array
   decode(ids: number[]): string
 }
 
@@ -74,5 +81,6 @@ export interface WasmModule {
   WasmBpeEncoder: {
     fromData(vocab: Array<[number[], number]>, merges: Array<[number[], number[]]>, options: object): RawBpeEncoder
     fromFiles(vocab: string, merges: string, options: object): RawBpeEncoder
+    fromTiktoken(model: string, special_tokens: object[], options: object): RawBpeEncoder
   }
 }

@@ -109,3 +109,33 @@ jobs:
           pnpm build
           pnpm test
           npm pack --dry-run --ignore-scripts
+
+      - name: Install inspect package dependencies
+        working-directory: packages/ffbpe-inspect
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and test inspect package
+        working-directory: packages/ffbpe-inspect
+        run: |
+          pnpm build
+          pnpm test
+          npm pack --dry-run --ignore-scripts
+
+      - name: Install preset package dependencies
+        working-directory: packages/ffbpe-presets
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and test preset package
+        working-directory: packages/ffbpe-presets
+        run: |
+          pnpm build
+          pnpm test
+          npm pack --dry-run --ignore-scripts
+
+      - name: Install inspect website dependencies
+        working-directory: apps/ffbpe-inspect
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build and test inspect website
+        working-directory: apps/ffbpe-inspect
+        run: npm test

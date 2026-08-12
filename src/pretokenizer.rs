@@ -125,11 +125,22 @@ pub struct PreTokenizer {
   vocab_bigram_index: VocabBigramIndex,
 }
 
-/// A borrowed output from the complete pretokenization pipeline.
+/// The kind of a borrowed output from the complete pretokenization pipeline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreTokenPiece<'a> {
+pub enum PreTokenPiece<'a> {
+  /// A configured special token that must remain indivisible.
   Special(&'a str),
+  /// An ordinary word produced by PAT and optional bigram splitting.
   Word(&'a str),
+}
+
+impl<'a> PreTokenPiece<'a> {
+  /// Return the borrowed text covered by this piece.
+  pub fn text(self) -> &'a str {
+    match self {
+      Self::Special(text) | Self::Word(text) => text,
+    }
+  }
 }
 
 impl PreTokenizer {
@@ -210,6 +221,53 @@ impl PreTokenizer {
     }
     if last_pos < text.len() {
       self.for_each_word(&text[last_pos..], &mut split_points, &mut emit)?;
+    }
+    Ok(())
+  }
+
+  /// Visit user-visible special tokens and pretokens in input order.
+  ///
+  /// Unlike [`Self::for_each_piece`], this stops before the model-vocabulary
+  /// bigram optimization partitions words for encoding. PAT and configured
+  /// Unicode-bigram boundaries are still applied.
+  pub fn for_each_logical_piece<'a>(
+    &self,
+    text: &'a str,
+    mut emit: impl FnMut(PreTokenPiece<'a>) -> MyResult<()>,
+  ) -> MyResult<()> {
+    if self.re_special_tokens.as_str() == "$^" {
+      return for_each_pretoken(
+        text,
+        &self.re_pat,
+        self.unicode_bigrams.as_ref(),
+        self.unicode_bigram_mixed_boundary,
+        |word| emit(PreTokenPiece::Word(word)),
+      );
+    }
+
+    let mut last_pos = 0;
+    for found in self.re_special_tokens.find_iter(text) {
+      let special = found?;
+      if special.start() > last_pos {
+        for_each_pretoken(
+          &text[last_pos..special.start()],
+          &self.re_pat,
+          self.unicode_bigrams.as_ref(),
+          self.unicode_bigram_mixed_boundary,
+          |word| emit(PreTokenPiece::Word(word)),
+        )?;
+      }
+      emit(PreTokenPiece::Special(&text[special.start()..special.end()]))?;
+      last_pos = special.end();
+    }
+    if last_pos < text.len() {
+      for_each_pretoken(
+        &text[last_pos..],
+        &self.re_pat,
+        self.unicode_bigrams.as_ref(),
+        self.unicode_bigram_mixed_boundary,
+        |word| emit(PreTokenPiece::Word(word)),
+      )?;
     }
     Ok(())
   }
@@ -1054,6 +1112,27 @@ mod tests {
         ("special", "<eot>"),
         ("word", "abc"),
         ("word", "z"),
+      ],
+    );
+
+    let mut logical_pieces = Vec::new();
+    pre_tokenizer
+      .for_each_logical_piece("你好世界<eot>abcz", |piece| {
+        logical_pieces.push(match piece {
+          PreTokenPiece::Special(special) => ("special", special),
+          PreTokenPiece::Word(word) => ("word", word),
+        });
+        Ok(())
+      })
+      .unwrap();
+    assert_eq!(
+      logical_pieces,
+      [
+        ("word", "你好"),
+        ("word", "世"),
+        ("word", "界"),
+        ("special", "<eot>"),
+        ("word", "abcz"),
       ],
     );
     assert_eq!(

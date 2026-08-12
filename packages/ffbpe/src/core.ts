@@ -6,9 +6,11 @@ import type {
   HotPairWindowStats,
   ModelConfig,
   PretrainedFiles,
+  PreTokenSpan,
   PreTokenizerOptions,
   SourceBatchOptions,
   TextFile,
+  TiktokenSpecialToken,
   TrainerMemoryUsage,
   Runtime,
   TrainBpeOptions,
@@ -173,6 +175,11 @@ export class PreTokenizer {
 
   getWords(text: string): WordFrequencies {
     return this.inner.getWords(text)
+  }
+
+  /** Return ordered logical pretokens with UTF-8 byte offsets. */
+  split(text: string): PreTokenSpan[] {
+    return this.inner.split(text)
   }
 
   bigramCounter(): BigramCounter {
@@ -546,6 +553,25 @@ export class BpeEncoder {
     return BpeEncoder.fromRaw(wasm().WasmBpeEncoder.fromFiles(vocab, merges, encoderOptions(options)))
   }
 
+  static fromTiktoken(
+    model: string,
+    special_tokens: readonly TiktokenSpecialToken[] = [],
+    options: BpeEncoderOptions = {},
+  ): BpeEncoder {
+    const normalized_special_tokens = special_tokens.map(token => {
+      unsignedInteger(token.id, `special token id for ${JSON.stringify(token.text)}`, 0xffff_ffff)
+      return { text: token.text, id: token.id }
+    })
+    return BpeEncoder.fromRaw(wasm().WasmBpeEncoder.fromTiktoken(
+      model,
+      normalized_special_tokens,
+      encoderOptions({
+        ...options,
+        special_tokens: normalized_special_tokens.map(token => token.text),
+      }),
+    ))
+  }
+
   static async load(
     vocab_file: TextFile,
     merges_file: TextFile,
@@ -596,6 +622,12 @@ export class BpeEncoder {
 
   encode(text: string): Uint32Array {
     return this.inner.encode(text)
+  }
+
+  /** Return the exact vocabulary bytes represented by a token id. */
+  tokenBytes(id: number): Uint8Array {
+    unsignedInteger(id, "token id", 0xffff_ffff)
+    return this.inner.tokenBytes(id)
   }
 
   async encodeFile(file: string | URL | Blob): Promise<Uint32Array> {
