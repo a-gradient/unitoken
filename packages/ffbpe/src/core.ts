@@ -48,7 +48,9 @@ export class FFBPE {
 
 function runtime(): Runtime {
   if (active_runtime === undefined) {
-    throw new Error("No FFBPE runtime configured. Import `@tokn-ai/ffbpe/browser` or `@tokn-ai/ffbpe/node`.")
+    throw new Error(
+      "No FFBPE runtime configured. Call `await FFBPE.init()` from `@tokn-ai/ffbpe/browser` or `@tokn-ai/ffbpe/node` first.",
+    )
   }
   return active_runtime
 }

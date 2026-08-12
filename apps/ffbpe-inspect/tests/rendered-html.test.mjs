@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { build } from "vite";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -39,14 +42,44 @@ test("builds a relocatable GitHub Pages app", async () => {
   assert.doesNotMatch(html, /(?:src|href)="\/(?:assets|models)\//);
 });
 
-test("static app bundles one configured FFBPE runtime", async () => {
-  const manifest = JSON.parse(
-    await readFile(new URL("../dist-pages/.vite/manifest.json", import.meta.url), "utf8"),
-  );
-  const entry = Object.values(manifest).find(chunk => chunk.isEntry === true);
+test("optimized browser entry initializes its FFBPE runtime", async () => {
+  const output_directory = await mkdtemp(join(tmpdir(), "ffbpe-browser-runtime-"));
+  const repository_root = resolve("../..");
+  const browser_entry = resolve(repository_root, "packages/ffbpe/dist/browser.js");
 
-  assert.ok(entry, "missing static app entry in Vite manifest");
-  const source = await readFile(resolve("dist-pages", entry.file), "utf8");
-  assert.equal(source.match(/No FFBPE runtime configured/g)?.length, 1);
-  assert.equal(source.match(/wasm_input/g)?.length, 1);
+  await build({
+    configFile: false,
+    logLevel: "silent",
+    build: {
+      emptyOutDir: true,
+      lib: {
+        entry: resolve("tests/fixtures/browser-runtime-probe.ts"),
+        fileName: () => "runtime-probe.mjs",
+        formats: ["es"],
+      },
+      outDir: output_directory,
+    },
+    resolve: {
+      alias: [
+        { find: /^@tokn-ai\/ffbpe(?:\/browser)?$/, replacement: browser_entry },
+      ],
+    },
+  });
+
+  const native_fetch = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = input instanceof Request ? new URL(input.url) : new URL(input);
+    if (url.protocol !== "file:") return native_fetch(input);
+    const body = await readFile(url);
+    return new Response(body, { headers: { "Content-Type": "application/wasm" } });
+  };
+
+  try {
+    const probe_url = pathToFileURL(join(output_directory, "runtime-probe.mjs"));
+    probe_url.searchParams.set("test", `${process.pid}-${Date.now()}`);
+    const probe = await import(probe_url.href);
+    await probe.initializeBrowserRuntime();
+  } finally {
+    globalThis.fetch = native_fetch;
+  }
 });
