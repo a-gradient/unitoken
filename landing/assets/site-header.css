@@ -1,0 +1,116 @@
+.site-header {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  width: 100%;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+.site-header-inner {
+  width: min(100% - 3rem, 1240px);
+  min-height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-inline: auto;
+}
+
+.site-brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+  width: fit-content;
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-brand-mark {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  font-size: 29px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.site-brand-mark i {
+  padding-inline: 4px;
+  color: var(--orange);
+  font-style: normal;
+}
+
+.site-brand-section {
+  color: var(--muted, #686c6d);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(1.2rem, 3vw, 2.5rem);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.site-nav a {
+  position: relative;
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-nav a::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -0.35rem;
+  left: 0;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 180ms ease;
+}
+
+.site-nav a:hover::after,
+.site-nav a:focus-visible::after,
+.site-nav a[aria-current="page"]::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+.site-nav a[aria-current="page"]::after {
+  height: 2px;
+  background: var(--orange);
+}
+
+@media (max-width: 680px) {
+  .site-header-inner {
+    width: min(100% - 1.5rem, 1240px);
+    min-height: 72px;
+    gap: 1rem;
+  }
+
+  .site-nav {
+    gap: 0.75rem;
+  }
+
+  .site-nav a:nth-child(-n + 2) {
+    display: none;
+  }
+
+  .site-brand-section {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-nav a::after {
+    transition: none;
+  }
+}

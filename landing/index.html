@@ -28,6 +28,7 @@
     <meta name="twitter:image" content="https://tokn-ai.dev/ffbpe/assets/og-wide.png">
     <link rel="canonical" href="https://tokn-ai.dev/ffbpe/">
     <link rel="icon" href="./assets/favicon.png" type="image/png">
+    <link rel="stylesheet" href="./assets/site-header.css">
     <link rel="stylesheet" href="./assets/styles.css">
     <title>FFBPE — Exact BPE at corpus scale</title>
   </head>
@@ -35,18 +36,20 @@
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="site-header">
-      <a class="brand" href="./" aria-label="FFBPE home">
-        <span class="brand-wordmark" aria-hidden="true">
-          <b>FF</b><i>/</i><b>BPE</b>
-        </span>
-      </a>
-      <nav class="nav-links" aria-label="Primary navigation">
-        <a href="#why">Why FFBPE</a>
-        <a href="#benchmarks">Benchmarks</a>
-        <a href="./inspect/">Inspect</a>
-        <a href="./docs/">Docs</a>
-        <a href="https://github.com/tokn-ai/ffbpe">GitHub</a>
-      </nav>
+      <div class="site-header-inner">
+        <a class="site-brand" href="./" aria-label="FFBPE home">
+          <span class="site-brand-mark" aria-hidden="true">
+            <b>FF</b><i>/</i><b>BPE</b>
+          </span>
+        </a>
+        <nav class="site-nav" aria-label="Primary navigation">
+          <a href="#why">Why FFBPE</a>
+          <a href="#benchmarks">Benchmarks</a>
+          <a href="./inspect/">Inspect</a>
+          <a href="./docs/">Docs</a>
+          <a href="https://github.com/tokn-ai/ffbpe">GitHub</a>
+        </nav>
+      </div>
     </header>
 
     <main id="main">
@@ -280,7 +283,7 @@ encoder = BpeEncoder.from_pretrained(<span class="str">"my-tokenizer"</span>)</c
 
     <footer class="site-footer">
       <div class="footer-brand">
-        <span class="brand-wordmark" aria-hidden="true">
+        <span class="site-brand-mark" aria-hidden="true">
           <b>FF</b><i>/</i><b>BPE</b>
         </span>
         <span>by tokn-ai</span>

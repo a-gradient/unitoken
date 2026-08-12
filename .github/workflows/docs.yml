@@ -75,11 +75,14 @@ jobs:
       - name: Validate site artifact
         run: |
           test -f site/index.html
+          test -f site/assets/site-header.css
           test -f site/docs/index.html
           test -f site/inspect/index.html
           test -f site/inspect/models/cl100k_base.tiktoken
           test -n "$(find site/inspect/assets -name '*.wasm' -print -quit)"
           grep -Fq 'href="./inspect/"' site/index.html
+          grep -Fq 'class="site-header"' site/index.html
+          grep -Fq 'class="site-header"' site/inspect/index.html
           grep -Fq 'src="./assets/' site/inspect/index.html
 
       - name: Configure GitHub Pages

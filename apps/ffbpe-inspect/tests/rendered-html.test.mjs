@@ -25,10 +25,33 @@ test("server-renders the inspector shell", async () => {
   const html = await response.text();
   assert.match(html, /FFBPE Inspect/);
   assert.match(html, /FF<\/b><i>\/<\/i><b>BPE/);
+  assert.match(html, /class="site-header"/);
+  assert.match(html, /href="\.\/" aria-current="page">Inspect/);
+  assert.match(html, /href="\.\.\/docs\/">Docs/);
   assert.match(html, /TOKENIZER PRESET/);
   assert.match(html, /Downloading and verifying .*cl100k_base/);
   assert.doesNotMatch(html, /See what your|WHY TWO STEPS|Boundaries first|RUNS ENTIRELY/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
+});
+
+test("landing and inspector use the same site header contract", async () => {
+  const [response, landing] = await Promise.all([
+    render(),
+    readFile(new URL("../../../landing/index.html", import.meta.url), "utf8"),
+  ]);
+  const inspector = await response.text();
+
+  for (const html of [landing, inspector]) {
+    assert.match(html, /class="site-header"/);
+    assert.match(html, /class="site-header-inner"/);
+    assert.match(html, /class="site-brand-mark"/);
+    assert.match(html, /class="site-nav"/);
+    assert.match(html, />Why FFBPE<\/a>/);
+    assert.match(html, />Benchmarks<\/a>/);
+    assert.match(html, />Inspect<\/a>/);
+    assert.match(html, />Docs<\/a>/);
+    assert.match(html, />GitHub<\/a>/);
+  }
 });
 
 test("builds a relocatable GitHub Pages app", async () => {

@@ -116,25 +116,33 @@ export default function Home() {
 
   return (
     <main id="top">
-      <nav className="topbar" aria-label="Primary navigation">
-        <a className="brand" href="#top" aria-label="FFBPE Inspect home">
-          <span className="brand-mark"><b>FF</b><i>/</i><b>BPE</b></span>
-          <span className="brand-sub">INSPECT</span>
-        </a>
-        <div className="nav-note">
-          <span className="live-dot" aria-hidden="true" />
-          WASM · LOCAL MODELS · NO DATA LEAVES THIS TAB
+      <header className="site-header">
+        <div className="site-header-inner">
+          <a className="site-brand" href="../" aria-label="FFBPE home">
+            <span className="site-brand-mark" aria-hidden="true">
+              <b>FF</b><i>/</i><b>BPE</b>
+            </span>
+            <span className="site-brand-section">INSPECT</span>
+          </a>
+          <nav className="site-nav" aria-label="Primary navigation">
+            <a href="../#why">Why FFBPE</a>
+            <a href="../#benchmarks">Benchmarks</a>
+            <a href="./" aria-current="page">Inspect</a>
+            <a href="../docs/">Docs</a>
+            <a href="https://github.com/tokn-ai/ffbpe">GitHub</a>
+          </nav>
         </div>
-        <a className="github-link" href="https://github.com/tokn-ai/ffbpe">
-          GitHub <span aria-hidden="true">↗</span>
-        </a>
-      </nav>
+      </header>
 
       <section className="workbench" aria-label="Tokenizer inspector">
         <div className="input-header">
           <div>
             <span className="step-kicker">INPUT</span>
             <h2>Give it something interesting.</h2>
+            <p className="runtime-note">
+              <span className="live-dot" aria-hidden="true" />
+              WASM · LOCAL MODELS · NO DATA LEAVES THIS TAB
+            </p>
           </div>
           <div className="input-controls">
             <label className="preset-picker">
