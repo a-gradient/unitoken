@@ -5,6 +5,7 @@
 [![Documentation](https://img.shields.io/badge/docs-tokn--ai.dev%2Fffbpe%2Fdocs-blue.svg)](https://tokn-ai.dev/ffbpe/docs/)
 [![PyPI](https://img.shields.io/pypi/v/ffbpe.svg)](https://pypi.org/project/ffbpe/)
 [![crates.io](https://img.shields.io/crates/v/ffbpe.svg)](https://crates.io/crates/ffbpe)
+[![npm](https://img.shields.io/npm/v/@tokn-ai/ffbpe.svg)](https://www.npmjs.com/package/@tokn-ai/ffbpe)
 [![docs.rs](https://docs.rs/ffbpe/badge.svg)](https://docs.rs/ffbpe)
 
 **FFBPE is fast and faithful byte-pair encoding for large, multilingual corpora.**

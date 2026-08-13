@@ -6,8 +6,72 @@ on:
       - v*
 
 jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify versions and tag
+        run: python3 .github/scripts/verify-release-versions.py
+
+      - name: Verify crates.io package identities
+        shell: bash
+        run: |
+          for package in ffbpe-pat ffbpe; do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
+              "https://crates.io/api/v1/crates/${package}")"
+            if [[ "$status" != 200 ]]; then
+              echo "${package} is missing from crates.io (HTTP ${status})." >&2
+              echo "A maintainer must publish a bootstrap version manually." >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify npm package identities
+        shell: bash
+        run: |
+          for directory in \
+            packages/ffbpe \
+            packages/ffbpe-inspect \
+            packages/ffbpe-presets
+          do
+            package="$(node -p "require('./${directory}/package.json').name")"
+            if ! npm view "$package" name --json >/dev/null; then
+              echo "${package} is missing from npm." >&2
+              echo "A maintainer must publish a bootstrap version manually." >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify manually published v0.1.9 packages
+        if: github.ref_name == 'v0.1.9'
+        shell: bash
+        run: |
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
+            'https://crates.io/api/v1/crates/ffbpe-pat/0.1.0')"
+          if [[ "$status" != 200 ]]; then
+            echo "ffbpe-pat@0.1.0 is missing from crates.io (HTTP ${status})." >&2
+            exit 1
+          fi
+
+          for package_version in \
+            '@tokn-ai/ffbpe@0.1.9' \
+            '@tokn-ai/ffbpe-inspect@0.1.0' \
+            '@tokn-ai/ffbpe-presets@0.1.0'
+          do
+            if ! npm view "$package_version" version --json >/dev/null; then
+              echo "${package_version} is missing from npm." >&2
+              exit 1
+            fi
+          done
+
   publish:
     name: Publish to crates.io
+    needs: verify
     runs-on: ubuntu-latest
     environment: cargo
     permissions:
@@ -18,39 +82,85 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Check whether the version is already published
-        id: version
-        shell: bash
-        run: |
-          package="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
-          status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
-            "https://crates.io/api/v1/crates/${package}/${version}")"
-          case "$status" in
-            200)
-              echo "exists=true" >> "$GITHUB_OUTPUT"
-              ;;
-            404)
-              echo "exists=false" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "crates.io returned HTTP $status" >&2
-              exit 1
-              ;;
-          esac
-
       - name: Authenticate to crates.io
         id: auth
-        if: steps.version.outputs.exists != 'true'
         uses: rust-lang/crates-io-auth-action@v1
 
-      - name: Publish
-        if: steps.version.outputs.exists != 'true'
+      - name: Publish ffbpe-pat
+        if: github.ref_name != 'v0.1.9'
+        run: cargo publish -p ffbpe-pat
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Wait for ffbpe-pat registry propagation
+        if: github.ref_name != 'v0.1.9'
+        shell: bash
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "ffbpe-pat") | .version')"
+          for attempt in {1..30}; do
+            if cargo info "ffbpe-pat@${version}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "ffbpe-pat@${version} did not reach the crates.io index" >&2
+          exit 1
+
+      - name: Publish ffbpe
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
-      - name: Version already published
-        if: steps.version.outputs.exists == 'true'
-        run: echo "This crate version is already available on crates.io."
+  publish-npm:
+    name: Publish npm packages
+    needs: verify
+    if: github.ref_name != 'v0.1.9'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install wasm-pack and pnpm
+        run: |
+          cargo install wasm-pack --locked --version 0.13.0
+          npm install --global pnpm@10
+
+      - name: Build core npm package
+        run: |
+          pnpm --dir packages/ffbpe install --frozen-lockfile
+          pnpm --dir packages/ffbpe build
+          pnpm --dir packages/ffbpe test
+
+      - name: Build companion npm packages
+        run: |
+          pnpm --dir packages/ffbpe-inspect install --frozen-lockfile
+          pnpm --dir packages/ffbpe-inspect build
+          pnpm --dir packages/ffbpe-inspect test
+          pnpm --dir packages/ffbpe-presets install --frozen-lockfile
+          pnpm --dir packages/ffbpe-presets build
+          pnpm --dir packages/ffbpe-presets test
+
+      - name: Publish npm packages
+        run: |
+          npm publish ./packages/ffbpe --access public --ignore-scripts --provenance
+          npm publish ./packages/ffbpe-inspect --access public --ignore-scripts --provenance
+          npm publish ./packages/ffbpe-presets --access public --ignore-scripts --provenance
