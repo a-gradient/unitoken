@@ -46,6 +46,29 @@ jobs:
             fi
           done
 
+      - name: Verify manually published v0.1.9 packages
+        if: github.ref_name == 'v0.1.9'
+        shell: bash
+        run: |
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
+            'https://crates.io/api/v1/crates/ffbpe-pat/0.1.0')"
+          if [[ "$status" != 200 ]]; then
+            echo "ffbpe-pat@0.1.0 is missing from crates.io (HTTP ${status})." >&2
+            exit 1
+          fi
+
+          for package_version in \
+            '@tokn-ai/ffbpe@0.1.9' \
+            '@tokn-ai/ffbpe-inspect@0.1.0' \
+            '@tokn-ai/ffbpe-presets@0.1.0'
+          do
+            if ! npm view "$package_version" version --json >/dev/null; then
+              echo "${package_version} is missing from npm." >&2
+              exit 1
+            fi
+          done
+
   publish:
     name: Publish to crates.io
     needs: verify
@@ -64,11 +87,13 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish ffbpe-pat
+        if: github.ref_name != 'v0.1.9'
         run: cargo publish -p ffbpe-pat
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Wait for ffbpe-pat registry propagation
+        if: github.ref_name != 'v0.1.9'
         shell: bash
         run: |
           version="$(cargo metadata --no-deps --format-version 1 \
@@ -90,6 +115,7 @@ jobs:
   publish-npm:
     name: Publish npm packages
     needs: verify
+    if: github.ref_name != 'v0.1.9'
     runs-on: ubuntu-latest
     environment: npm
     permissions:

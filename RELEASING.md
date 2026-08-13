@@ -18,10 +18,8 @@ versions; for the `v0.1.9` release, `ffbpe-pat` and both npm companions start at
 ## First crates.io dependency release
 
 `ffbpe 0.1.9` depends on the new `ffbpe-pat 0.1.0` crate. Trusted publishing
-cannot be configured until a crate exists. Before tagging the release, a
-maintainer must manually publish a non-release bootstrap version such as
-`ffbpe-pat 0.0.0-bootstrap.0` from a temporary copy of the crate. Do not commit
-the bootstrap version to the repository.
+cannot be configured until a crate exists. For this release, a maintainer
+manually published `ffbpe-pat 0.1.0` to create the package identity.
 
 After the package identity exists, add a GitHub Actions trusted publisher for
 `ffbpe-pat` on crates.io with:
@@ -38,10 +36,9 @@ crates.io publishing token in GitHub.
 ## First npm release
 
 The three scoped packages must be created before npm trusted publishing can be
-configured in their package settings. Before tagging the release, a maintainer
-must manually publish each package from a temporary copy with the non-release
-version `0.0.0-bootstrap.0`. Do not commit bootstrap versions to the
-repository.
+configured in their package settings. For this release, a maintainer manually
+published `@tokn-ai/ffbpe 0.1.9`, `@tokn-ai/ffbpe-inspect 0.1.0`, and
+`@tokn-ai/ffbpe-presets 0.1.0` to create the package identities.
 
 After the package identities exist, create the `npm` GitHub environment and
 configure each package's npm trusted publisher with:
@@ -55,10 +52,12 @@ configure each package's npm trusted publisher with:
 Revoke any temporary manual bootstrap token after configuring trusted
 publishing. Do not store an npm publishing token in GitHub.
 
-The release workflow verifies both crates.io identities and all three npm
-package identities before requesting any OIDC credential. If every identity
-exists, it publishes all release versions in dependency order. Existing
-release versions are treated as errors rather than silently skipped.
+The `v0.1.9` release workflow verifies these four exact manual publications,
+skips their publish steps, and publishes only `ffbpe 0.1.9` to crates.io and
+PyPI through their existing trusted publishers. This is a one-release
+exception. Later releases publish all crates.io and npm packages normally in
+dependency order; existing release versions are errors rather than silently
+skipped.
 
 ## Tag and publish
 
