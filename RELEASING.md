@@ -18,28 +18,33 @@ versions; for the `v0.1.9` release, `ffbpe-pat` and both npm companions start at
 ## First crates.io dependency release
 
 `ffbpe 0.1.9` depends on the new `ffbpe-pat 0.1.0` crate. Trusted publishing
-cannot be configured until a crate exists, so add a crates.io API token as the
-`CRATES_IO_TOKEN` Actions secret in the `cargo` environment for this release.
-The release workflow publishes `ffbpe-pat` first, waits for it to reach the
-registry index, and then publishes `ffbpe` through its existing trusted
-publisher. Afterward, configure trusted publishing for `ffbpe-pat` and remove
-the token.
+cannot be configured until a crate exists. Before tagging the release, a
+maintainer must manually publish a non-release bootstrap version such as
+`ffbpe-pat 0.0.0-bootstrap.0` from a temporary copy of the crate. Do not commit
+the bootstrap version to the repository.
+
+After the package identity exists, add a GitHub Actions trusted publisher for
+`ffbpe-pat` on crates.io with:
+
+- organization: `tokn-ai`
+- repository: `ffbpe`
+- workflow filename: `release.yml`
+- environment: `cargo`
+
+The existing `ffbpe` trusted publisher should use the same values. Revoke the
+manual bootstrap token after configuring trusted publishing. Do not store a
+crates.io publishing token in GitHub.
 
 ## First npm release
 
 The three scoped packages must be created before npm trusted publishing can be
-configured in their package settings. For the first release only:
+configured in their package settings. Before tagging the release, a maintainer
+must manually publish each package from a temporary copy with the non-release
+version `0.0.0-bootstrap.0`. Do not commit bootstrap versions to the
+repository.
 
-1. Add a granular npm access token as the `NPM_TOKEN` Actions secret. It must
-   be allowed to publish public packages under the `@tokn-ai` scope.
-2. Ensure the `npm` GitHub environment allows the release job to run.
-3. Push `v0.1.9`. The release workflow publishes these packages in dependency
-   order:
-   - `@tokn-ai/ffbpe@0.1.9`
-   - `@tokn-ai/ffbpe-inspect@0.1.0`
-   - `@tokn-ai/ffbpe-presets@0.1.0`
-
-After the first publish, configure each package's npm trusted publisher with:
+After the package identities exist, create the `npm` GitHub environment and
+configure each package's npm trusted publisher with:
 
 - organization: `tokn-ai`
 - repository: `ffbpe`
@@ -47,12 +52,18 @@ After the first publish, configure each package's npm trusted publisher with:
 - environment: `npm`
 - allowed action: `npm publish`
 
-Then remove `NPM_TOKEN`. The workflow uses GitHub OIDC for later releases and
-requests provenance for every npm publication.
+Revoke any temporary manual bootstrap token after configuring trusted
+publishing. Do not store an npm publishing token in GitHub.
+
+The release workflow verifies both crates.io identities and all three npm
+package identities before requesting any OIDC credential. If every identity
+exists, it publishes all release versions in dependency order. Existing
+release versions are treated as errors rather than silently skipped.
 
 ## Tag and publish
 
-Only tag a commit on `master` after its CI checks pass:
+Only tag a commit on `master` after its CI checks pass, all first versions are
+available in their registries, and every trusted publisher is configured:
 
 ```sh
 git tag -a v0.1.9 -m "FFBPE 0.1.9"

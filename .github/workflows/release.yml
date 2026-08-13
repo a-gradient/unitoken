@@ -7,7 +7,7 @@ on:
 
 jobs:
   verify:
-    name: Verify release metadata
+    name: Verify release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -15,6 +15,36 @@ jobs:
 
       - name: Verify versions and tag
         run: python3 .github/scripts/verify-release-versions.py
+
+      - name: Verify crates.io package identities
+        shell: bash
+        run: |
+          for package in ffbpe-pat ffbpe; do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
+              "https://crates.io/api/v1/crates/${package}")"
+            if [[ "$status" != 200 ]]; then
+              echo "${package} is missing from crates.io (HTTP ${status})." >&2
+              echo "A maintainer must publish a bootstrap version manually." >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify npm package identities
+        shell: bash
+        run: |
+          for directory in \
+            packages/ffbpe \
+            packages/ffbpe-inspect \
+            packages/ffbpe-presets
+          do
+            package="$(node -p "require('./${directory}/package.json').name")"
+            if ! npm view "$package" name --json >/dev/null; then
+              echo "${package} is missing from npm." >&2
+              echo "A maintainer must publish a bootstrap version manually." >&2
+              exit 1
+            fi
+          done
 
   publish:
     name: Publish to crates.io
@@ -29,41 +59,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Check whether ffbpe-pat is already published
-        id: pat-version
-        shell: bash
-        run: |
-          version="$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "ffbpe-pat") | .version')"
-          status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
-            "https://crates.io/api/v1/crates/ffbpe-pat/${version}")"
-          case "$status" in
-            200)
-              echo "exists=true" >> "$GITHUB_OUTPUT"
-              ;;
-            404)
-              echo "exists=false" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "crates.io returned HTTP $status" >&2
-              exit 1
-              ;;
-          esac
+      - name: Authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish ffbpe-pat
-        if: steps.pat-version.outputs.exists != 'true'
-        run: |
-          test -n "$CARGO_REGISTRY_TOKEN" || {
-            echo "CRATES_IO_TOKEN is required for the first ffbpe-pat publish" >&2
-            exit 1
-          }
-          cargo publish -p ffbpe-pat
+        run: cargo publish -p ffbpe-pat
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Wait for ffbpe-pat registry propagation
-        if: steps.pat-version.outputs.exists != 'true'
         shell: bash
         run: |
           version="$(cargo metadata --no-deps --format-version 1 \
@@ -77,42 +82,10 @@ jobs:
           echo "ffbpe-pat@${version} did not reach the crates.io index" >&2
           exit 1
 
-      - name: Check whether the version is already published
-        id: version
-        shell: bash
-        run: |
-          package="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
-          status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --user-agent 'ffbpe-release-workflow/1.0 (https://github.com/tokn-ai/ffbpe)' \
-            "https://crates.io/api/v1/crates/${package}/${version}")"
-          case "$status" in
-            200)
-              echo "exists=true" >> "$GITHUB_OUTPUT"
-              ;;
-            404)
-              echo "exists=false" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "crates.io returned HTTP $status" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Authenticate to crates.io
-        id: auth
-        if: steps.version.outputs.exists != 'true'
-        uses: rust-lang/crates-io-auth-action@v1
-
-      - name: Publish
-        if: steps.version.outputs.exists != 'true'
+      - name: Publish ffbpe
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-
-      - name: Version already published
-        if: steps.version.outputs.exists == 'true'
-        run: echo "This crate version is already available on crates.io."
 
   publish-npm:
     name: Publish npm packages
@@ -161,9 +134,7 @@ jobs:
           pnpm --dir packages/ffbpe-presets test
 
       - name: Publish npm packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          bash .github/scripts/publish-npm-package.sh packages/ffbpe
-          bash .github/scripts/publish-npm-package.sh packages/ffbpe-inspect
-          bash .github/scripts/publish-npm-package.sh packages/ffbpe-presets
+          npm publish ./packages/ffbpe --access public --ignore-scripts --provenance
+          npm publish ./packages/ffbpe-inspect --access public --ignore-scripts --provenance
+          npm publish ./packages/ffbpe-presets --access public --ignore-scripts --provenance
