@@ -29,7 +29,7 @@ dispatch, a phase-based o200k word scan, and shared whitespace scanning. They
 retain the public iterator API and `regex-syntax` Unicode properties. This pass
 also fixes a pre-existing cl100k mismatch: trailing `" \n \t"` must remain one
 whitespace token because the end-of-input branch precedes the newline branch.
-See the [PAT crate](../crates/ffbpe-pat/README.md) for upstream attribution and
+See the [PAT crate](https://github.com/tokn-ai/ffbpe/blob/master/crates/ffbpe-pat/README.md) for upstream attribution and
 the optimization candidates not yet adopted.
 
 Reproduce on each revision with:
