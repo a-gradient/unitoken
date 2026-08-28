@@ -75,7 +75,8 @@ therefore measures the generic fallback. Its pattern is fixed so Criterion
 results remain reproducible.
 
 The dedicated `ffbpe-pat` crate also owns a standalone specialized-versus-regex
-benchmark over generated English, Chinese, and mixed-script inputs:
+benchmark over generated English, Chinese, mixed-script, long ASCII, code,
+and case-transition inputs:
 
 ```bash
 cargo bench -p ffbpe-pat --bench scan

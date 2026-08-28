@@ -1,9 +1,11 @@
 use std::sync::LazyLock;
 
 use regex_syntax::{
-  hir::{Class, ClassUnicode, HirKind},
   Parser,
+  hir::{Class, ClassUnicode, HirKind},
 };
+
+use super::ascii;
 
 static CHAR_CLASSES: LazyLock<Box<[u8]>> = LazyLock::new(unicode_class_table);
 static CASE_D: LazyLock<ClassUnicode> = LazyLock::new(|| unicode_class(r"(?i:d)"));
@@ -72,34 +74,42 @@ pub(super) fn is_other(ch: char) -> bool {
 }
 
 #[inline]
-pub(super) fn is_o200k_upper_or_shared(ch: char) -> bool {
-  if ch.is_ascii() {
-    ch.is_ascii_uppercase()
-  } else {
-    CHAR_CLASSES[ch as usize] & O200K_UPPER_OR_SHARED != 0
+pub(super) fn case_class(ch: char) -> CaseClass {
+  let flags = CHAR_CLASSES[ch as usize];
+  match flags & (O200K_UPPER_OR_SHARED | O200K_LOWER_OR_SHARED) {
+    O200K_UPPER_OR_SHARED => CaseClass::Upper,
+    O200K_LOWER_OR_SHARED => CaseClass::Lower,
+    0 => CaseClass::Other,
+    _ => CaseClass::Shared,
   }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CaseClass {
+  Upper,
+  Lower,
+  Shared,
+  Other,
 }
 
 #[inline]
-pub(super) fn is_o200k_lower_or_shared(ch: char) -> bool {
-  if ch.is_ascii() {
-    ch.is_ascii_lowercase()
-  } else {
-    CHAR_CLASSES[ch as usize] & O200K_LOWER_OR_SHARED != 0
-  }
-}
-
 pub(super) fn char_at(text: &str, start: usize) -> char {
+  let byte = text.as_bytes()[start];
+  if byte.is_ascii() {
+    return char::from(byte);
+  }
   text[start..]
     .chars()
     .next()
     .expect("start is before end of text")
 }
 
+#[inline]
 pub(super) fn next_boundary(text: &str, start: usize) -> usize {
   start + char_at(text, start).len_utf8()
 }
 
+#[inline]
 pub(super) fn scan_while(
   text: &str,
   start: usize,
@@ -115,48 +125,122 @@ pub(super) fn scan_while(
   end
 }
 
+#[inline]
+pub(super) fn scan_letters(text: &str, mut start: usize) -> usize {
+  loop {
+    start = ascii::scan_letters(text.as_bytes(), start);
+    // Decode a contiguous non-ASCII run without restarting the iterator at
+    // each scalar; return to SWAR when ASCII letters resume.
+    let mut end = start;
+    for (offset, ch) in text[start..].char_indices() {
+      if ch.is_ascii() {
+        if !ch.is_ascii_alphabetic() {
+          return start + offset;
+        }
+        break;
+      }
+      if !is_letter(ch) {
+        return start + offset;
+      }
+      end = start + offset + ch.len_utf8();
+    }
+    if end == text.len() {
+      return end;
+    }
+    start = end;
+  }
+}
+
+#[inline]
 pub(super) fn scan_same_class(text: &str, start: usize, class: CharClass) -> usize {
   debug_assert_ne!(class, CharClass::Whitespace);
-  scan_while(text, start, |ch| char_class(ch) == class)
+  match class {
+    CharClass::Letter => scan_letters(text, start),
+    CharClass::Number => scan_while(text, start, is_number),
+    CharClass::Other => scan_while(text, start, is_other),
+    CharClass::Whitespace => unreachable!("whitespace has separate boundary rules"),
+  }
 }
 
 pub(super) fn scan_whitespace(text: &str, start: usize) -> usize {
-  let mut end = start;
-  let mut last_start = start;
-  let mut count = 0;
-  for (offset, ch) in text[start..].char_indices() {
-    if !is_whitespace(ch) {
-      break;
+  WhitespaceRun::scan(text, start).without_newlines(text.len(), start)
+}
+
+pub(super) fn scan_whitespace_with_newlines(
+  text: &str,
+  start: usize,
+  trailing_whitespace_first: bool,
+) -> usize {
+  let run = WhitespaceRun::scan(text, start);
+  // cl100k's `\s++$` precedes the newline branch; o200k has no such branch.
+  if trailing_whitespace_first && run.end == text.len() {
+    return run.end;
+  }
+  run
+    .last_newline_end
+    .unwrap_or_else(|| run.without_newlines(text.len(), start))
+}
+
+struct WhitespaceRun {
+  end: usize,
+  last_start: usize,
+  last_newline_end: Option<usize>,
+}
+
+impl WhitespaceRun {
+  fn scan(text: &str, start: usize) -> Self {
+    let mut run = Self {
+      end: start,
+      last_start: start,
+      last_newline_end: None,
+    };
+    for (offset, ch) in text[start..].char_indices() {
+      if !is_whitespace(ch) {
+        break;
+      }
+      run.last_start = start + offset;
+      run.end = run.last_start + ch.len_utf8();
+      if matches!(ch, '\r' | '\n') {
+        run.last_newline_end = Some(run.end);
+      }
     }
-    last_start = start + offset;
-    end = last_start + ch.len_utf8();
-    count += 1;
+    run
   }
 
-  if end < text.len() && count > 1 {
-    last_start
-  } else {
-    end
+  fn without_newlines(&self, text_len: usize, start: usize) -> usize {
+    if self.end < text_len && self.last_start > start {
+      self.last_start
+    } else {
+      self.end
+    }
   }
 }
 
-pub(super) fn scan_through_last_newline(text: &str, start: usize) -> Option<usize> {
-  let mut last_newline_end = None;
-  for (offset, ch) in text[start..].char_indices() {
-    if !is_whitespace(ch) {
-      break;
-    }
-    if matches!(ch, '\r' | '\n') {
-      last_newline_end = Some(start + offset + ch.len_utf8());
-    }
-  }
-  last_newline_end
-}
-
+#[inline]
 pub(super) fn case_insensitive_contraction_end(text: &str, start: usize) -> Option<usize> {
-  if char_at(text, start) != '\'' {
+  let bytes = text.as_bytes();
+  if bytes.get(start) != Some(&b'\'') {
     return None;
   }
+  let first = bytes.get(start + 1)?.to_ascii_lowercase();
+  match first {
+    b's' | b'd' | b'm' | b't' => Some(start + 2),
+    b'l' | b'v' | b'r' => {
+      let expected = if first == b'l' { 'l' } else { 'e' };
+      let &second = bytes.get(start + 2)?;
+      if second.is_ascii() {
+        (char::from(second.to_ascii_lowercase()) == expected).then_some(start + 3)
+      } else {
+        let actual = char_at(text, start + 2);
+        case_char_matches(actual, expected).then_some(start + 2 + actual.len_utf8())
+      }
+    }
+    _ if !first.is_ascii() => unicode_contraction_end(text, start),
+    _ => None,
+  }
+}
+
+fn unicode_contraction_end(text: &str, start: usize) -> Option<usize> {
   for suffix in ["ll", "ve", "re", "s", "d", "m", "t"] {
     let mut end = start + 1;
     let mut matched = true;
@@ -181,6 +265,9 @@ pub(super) fn case_insensitive_contraction_end(text: &str, start: usize) -> Opti
 
 #[inline]
 fn case_char_matches(actual: char, expected: char) -> bool {
+  if actual.is_ascii() {
+    return actual.to_ascii_lowercase() == expected;
+  }
   let class = match expected {
     'd' => &*CASE_D,
     'e' => &*CASE_E,
@@ -193,6 +280,17 @@ fn case_char_matches(actual: char, expected: char) -> bool {
     _ => return actual == expected,
   };
   class_contains(class, actual)
+}
+
+pub(super) fn scan_limited_numbers(text: &str, start: usize) -> usize {
+  let mut end = start;
+  for (offset, ch) in text[start..].char_indices().take(3) {
+    if !is_number(ch) {
+      break;
+    }
+    end = start + offset + ch.len_utf8();
+  }
+  end
 }
 
 #[inline]
@@ -229,14 +327,8 @@ fn unicode_class_table() -> Box<[u8]> {
     (r"\p{L}", LETTER),
     (r"\p{N}", NUMBER),
     (r"\s", WHITESPACE),
-    (
-      r"[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]",
-      O200K_UPPER_OR_SHARED,
-    ),
-    (
-      r"[\p{Ll}\p{Lm}\p{Lo}\p{M}]",
-      O200K_LOWER_OR_SHARED,
-    ),
+    (r"[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]", O200K_UPPER_OR_SHARED),
+    (r"[\p{Ll}\p{Lm}\p{Lo}\p{M}]", O200K_LOWER_OR_SHARED),
   ] {
     for range in unicode_class(pattern).ranges() {
       for classes in &mut table[range.start() as usize..=range.end() as usize] {
