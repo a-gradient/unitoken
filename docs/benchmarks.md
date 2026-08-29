@@ -46,21 +46,30 @@ and byte lengths rather than measuring a special count-only path.
 ### Unicode scanner follow-up
 
 On 2026-08-29, the Unicode hot-path follow-up compared merged commit `a385e28`
-with the candidate in alternating nine-sample runs on the same Apple M2 and
-fixtures. Both builds used the same `Cargo.lock`; complete token-stream
-fingerprints matched across all 72 specialized samples.
+with the candidate in nine-sample runs on the same Apple M2 and fixtures. Both
+builds used the same `Cargo.lock`; complete token-stream fingerprints matched
+across all 72 samples.
 
 | Pattern | English before → after (MiB/s) | Speedup | Chinese before → after (MiB/s) | Speedup |
 |---|---:|---:|---:|---:|
-| GPT-2 | 412 → 426 | 1.03× | 550 → 638 | 1.16× |
-| cl100k | 252 → 331 | 1.31× | 629 → 673 | 1.07× |
-| o200k | 336 → 350 | 1.04× | 391 → 602 | 1.54× |
+| GPT-2 | 412 → 438 | 1.06× | 550 → 632 | 1.15× |
+| cl100k | 252 → 393 | 1.56× | 629 → 694 | 1.10× |
+| o200k | 336 → 361 | 1.07× | 391 → 613 | 1.57× |
 
-Dense non-ASCII letter runs use direct UTF-8 decoding, while short script
-transitions retain Rust's standard UTF-8 iterator. The o200k case-state loop
-also resolves its Unicode table handle once per word. The unknown-pattern
-fallback is unchanged; its timing continued to vary with the regex reference
-timing during the alternating runs.
+The ASCII SWAR scanner remains a small inline wrapper; only non-ASCII
+continuations enter the out-of-line Unicode scanner. This keeps Unicode code
+out of the frequent ASCII call sites. Dense non-ASCII letter runs use direct
+UTF-8 decoding, while short script transitions retain Rust's standard UTF-8
+iterator. The o200k case-state loop also resolves its Unicode table handle once
+per word.
+
+The cl100k English fixture produced 1,242,910 pretokens (4.2 bytes per token),
+while the same-size Chinese fixture produced 270,425 (19.4 bytes per token).
+Consequently, English pays call-site and dispatch costs about 4.6 times as
+often per input byte and benefits more from the smaller inline path. This is a
+compiler- and workload-sensitive result, not a general claim that English text
+scans 1.56× faster on every target. The unknown-pattern fallback is unchanged;
+its observed throughput varied by less than 2%.
 
 ## Unicode-bigram inventory shaping
 

@@ -177,28 +177,39 @@ pub(super) fn scan_while(
 }
 
 #[inline]
-pub(super) fn scan_letters(text: &str, mut start: usize) -> usize {
+pub(super) fn scan_letters(text: &str, start: usize) -> usize {
+  let bytes = text.as_bytes();
+  let start = ascii::scan_letters(bytes, start);
+  if start == bytes.len() || bytes[start].is_ascii() {
+    return start;
+  }
+  scan_unicode_letters(text, start)
+}
+
+// Keep the Unicode state machine out of the frequent ASCII call sites.
+#[inline(never)]
+fn scan_unicode_letters(text: &str, mut start: usize) -> usize {
   const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
   let bytes = text.as_bytes();
+  let mut classes = None;
   loop {
-    start = ascii::scan_letters(bytes, start);
-    if start == bytes.len() || bytes[start].is_ascii() {
-      return start;
-    }
-
     // Direct decoding wins on dense multilingual runs, but adds overhead to
     // short script transitions. Use it only when the next eight bytes are all
     // non-ASCII; otherwise Rust's UTF-8 iterator handles the short run.
     if bytes.len() - start >= 8 {
       let word = u64::from_ne_bytes(bytes[start..start + 8].try_into().unwrap());
       if word & HIGH_BITS == HIGH_BITS {
-        let classes = ClassTable::get();
+        let classes = *classes.get_or_insert_with(ClassTable::get);
         while start < bytes.len() && !bytes[start].is_ascii() {
           let (codepoint, width) = decode_non_ascii(bytes, start);
           if !classes.is_letter(codepoint) {
             return start;
           }
           start += width;
+        }
+        start = ascii::scan_letters(bytes, start);
+        if start == bytes.len() || bytes[start].is_ascii() {
+          return start;
         }
         continue;
       }
@@ -222,7 +233,10 @@ pub(super) fn scan_letters(text: &str, mut start: usize) -> usize {
     if end == text.len() {
       return end;
     }
-    start = end;
+    start = ascii::scan_letters(bytes, end);
+    if start == bytes.len() || bytes[start].is_ascii() {
+      return start;
+    }
   }
 }
 

@@ -20,12 +20,14 @@ string slices.
 ## Scanning strategy
 
 ASCII letter runs use portable SWAR (eight bytes at a time using integer
-arithmetic), with scalar Unicode continuation. o200k resolves the class-table
-handle once per non-ASCII word and decodes case runs directly from the UTF-8
-byte cursor while tracking upper/shared and lower/shared phases in one forward
-scan. It remembers the last shared-character boundary needed by the regex's
-greedy alternatives. Whitespace runs are scanned once; contraction matching
-dispatches directly on ASCII bytes and retains Unicode case folding.
+arithmetic) in a small inline wrapper. Only non-ASCII continuations enter the
+out-of-line Unicode scanner, keeping its decoder and class-table state out of
+ASCII call sites. o200k resolves the class-table handle once per non-ASCII word
+and decodes case runs directly from the UTF-8 byte cursor while tracking
+upper/shared and lower/shared phases in one forward scan. It remembers the
+last shared-character boundary needed by the regex's greedy alternatives.
+Whitespace runs are scanned once; contraction matching dispatches directly on
+ASCII bytes and retains Unicode case folding.
 
 The public iterators still yield borrowed strings or byte ranges in order. The
 internal UTF-8 decoder and class-table lookup use unchecked indexing to remove
