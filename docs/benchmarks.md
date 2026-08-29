@@ -43,6 +43,25 @@ The standalone crate benchmark additionally covers generated mixed-script
 text, long ASCII words, code, and case transitions. It consumes token slices
 and byte lengths rather than measuring a special count-only path.
 
+### Unicode scanner follow-up
+
+On 2026-08-29, the Unicode hot-path follow-up compared merged commit `a385e28`
+with the candidate in alternating nine-sample runs on the same Apple M2 and
+fixtures. Both builds used the same `Cargo.lock`; complete token-stream
+fingerprints matched across all 72 specialized samples.
+
+| Pattern | English before → after (MiB/s) | Speedup | Chinese before → after (MiB/s) | Speedup |
+|---|---:|---:|---:|---:|
+| GPT-2 | 412 → 426 | 1.03× | 550 → 638 | 1.16× |
+| cl100k | 252 → 331 | 1.31× | 629 → 673 | 1.07× |
+| o200k | 336 → 350 | 1.04× | 391 → 602 | 1.54× |
+
+Dense non-ASCII letter runs use direct UTF-8 decoding, while short script
+transitions retain Rust's standard UTF-8 iterator. The o200k case-state loop
+also resolves its Unicode table handle once per word. The unknown-pattern
+fallback is unchanged; its timing continued to vary with the regex reference
+timing during the alternating runs.
+
 ## Unicode-bigram inventory shaping
 
 One release run used a 64 MiB FineWeb2 Chinese fixture and a target vocabulary

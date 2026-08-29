@@ -1,8 +1,8 @@
 use super::{
   ascii,
   common::{
-    CaseClass, case_class, case_insensitive_contraction_end, char_at, is_letter, is_number,
-    is_other, is_whitespace, next_boundary, scan_limited_numbers, scan_while,
+    CaseClass, ClassTable, case_class, case_insensitive_contraction_end, char_at, is_letter,
+    is_number, is_other, is_whitespace, next_boundary, scan_limited_numbers, scan_while,
     scan_whitespace_with_newlines,
   },
 };
@@ -68,6 +68,7 @@ fn word_end(text: &str, start: usize) -> Option<usize> {
 
 fn scan_case_word(text: &str, start: usize) -> Option<WordEnd> {
   let bytes = text.as_bytes();
+  let mut classes = None;
   let mut pos = start;
   let mut lower_phase = false;
   let mut last_shared_end = None;
@@ -84,19 +85,20 @@ fn scan_case_word(text: &str, start: usize) -> Option<WordEnd> {
     } else if byte.is_ascii() {
       break;
     } else {
-      let ch = char_at(text, pos);
-      match case_class(ch) {
+      let classes = *classes.get_or_insert_with(ClassTable::get);
+      let (class, width) = classes.case_class_at(text, pos);
+      match class {
         CaseClass::Upper if lower_phase => break,
         CaseClass::Upper => {}
         CaseClass::Lower => lower_phase = true,
         CaseClass::Shared => {
           if !lower_phase {
-            last_shared_end = Some(pos + ch.len_utf8());
+            last_shared_end = Some(pos + width);
           }
         }
         CaseClass::Other => break,
       }
-      pos += ch.len_utf8();
+      pos += width;
     }
   }
   if pos == start {
