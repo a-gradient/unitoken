@@ -4,6 +4,7 @@
 //! does not compile arbitrary regular expressions; callers should retain their
 //! regex fallback for patterns that [`Pattern::recognize`] does not identify.
 
+mod ascii;
 mod cl100k;
 mod common;
 mod gpt2;
@@ -34,12 +35,7 @@ pub enum Pattern {
 
 impl Pattern {
   /// All currently supported canonical pattern families.
-  pub const ALL: [Self; 4] = [
-    Self::Gpt2,
-    Self::R50k,
-    Self::Cl100k,
-    Self::O200k,
-  ];
+  pub const ALL: [Self; 4] = [Self::Gpt2, Self::R50k, Self::Cl100k, Self::O200k];
 
   /// Identify an exact known PAT expression.
   pub fn recognize(regex: &str) -> Option<Self> {
@@ -150,18 +146,18 @@ mod tests {
     assert_regex_string_parity(pattern, pattern.regex(), text);
   }
 
-  fn assert_regex_string_parity(
-    pattern: Pattern,
-    regex: &str,
-    text: &str,
-  ) {
+  fn assert_regex_string_parity(pattern: Pattern, regex: &str, text: &str) {
     let regex = Regex::new(regex).unwrap();
+    assert_compiled_regex_parity(pattern, &regex, text);
+  }
+
+  fn assert_compiled_regex_parity(pattern: Pattern, regex: &Regex, text: &str) {
     let expected = regex
       .find_iter(text)
       .map(|found| found.unwrap().as_str())
       .collect::<Vec<_>>();
     let actual = pattern.split(text).collect::<Vec<_>>();
-    assert_eq!(actual, expected, "pattern={pattern:?}");
+    assert_eq!(actual, expected, "pattern={pattern:?}, text={text:?}");
 
     let offsets = pattern.offsets(text).collect::<Vec<_>>();
     assert_eq!(
@@ -178,10 +174,7 @@ mod tests {
     for pattern in Pattern::ALL {
       assert_eq!(Pattern::recognize(pattern.regex()), Some(pattern));
     }
-    assert_eq!(
-      Pattern::recognize(GPT2_LEGACY_PATTERN),
-      Some(Pattern::Gpt2),
-    );
+    assert_eq!(Pattern::recognize(GPT2_LEGACY_PATTERN), Some(Pattern::Gpt2),);
     assert_eq!(Pattern::recognize(r"\p{L}+"), None);
   }
 
@@ -203,23 +196,68 @@ mod tests {
       "²¼ⅠⅫ⑴",
       "<|endoftext|>before<|endoftext|>after",
       " punctuation...?!—–_+=/\\\"'s ",
+      " \n \t",
+      "a\r\n \u{2003}",
+      "A中文B A中文Bc a中文B \u{301}ABC \u{301}ABCdef",
+      "\u{301}\u{301}A \u{301}A\u{301}B \u{301}A\u{301}b",
+      "x'ſtail 'ſtail 'Lſ 'VÉ 'REmainder",
+      "...\r\n//word",
     ] {
       for pattern in Pattern::ALL {
         assert_regex_parity(pattern, text);
       }
-      assert_regex_string_parity(
-        Pattern::Gpt2,
-        GPT2_LEGACY_PATTERN,
-        text,
-      );
+      assert_regex_string_parity(Pattern::Gpt2, GPT2_LEGACY_PATTERN, text);
+    }
+  }
+
+  #[test]
+  fn matches_regex_on_short_class_combinations() {
+    // Exercise branch priority and optional-prefix backtracking, especially
+    // marks (both word and punctuation members) and trailing whitespace.
+    const ALPHABET: &[char] = &[
+      'A', 'a', '中', '\u{301}', '1', ' ', '\t', '\n', '\r', '\u{2003}', '\'', '/',
+    ];
+    for pattern in Pattern::ALL {
+      let regex = Regex::new(pattern.regex()).unwrap();
+      for length in 1..=4 {
+        for mut value in 0..ALPHABET.len().pow(length) {
+          let mut text = String::new();
+          for _ in 0..length {
+            text.push(ALPHABET[value % ALPHABET.len()]);
+            value /= ALPHABET.len();
+          }
+          assert_compiled_regex_parity(pattern, &regex, &text);
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn matches_regex_at_ascii_run_boundaries() {
+    for pattern in Pattern::ALL {
+      let regex = Regex::new(pattern.regex()).unwrap();
+      for length in 0..=33 {
+        for word in ["a", "Z", "aZ"] {
+          for suffix in ["!", "é", "中", "\u{301}", "👩", "\n ", "'ſtail"] {
+            let text = format!(" {}{suffix}ASCII", word.repeat(length));
+            for end in text
+              .char_indices()
+              .map(|(index, _)| index)
+              .chain([text.len()])
+            {
+              assert_compiled_regex_parity(pattern, &regex, &text[..end]);
+            }
+          }
+        }
+      }
     }
   }
 
   #[test]
   fn matches_regex_on_deterministic_unicode_mix() {
     const ALPHABET: &[char] = &[
-      'a', 'Z', '0', '9', '\'', ' ', '\t', '\n', '\r', ',', '—', '你', '界', '한', '글',
-      'か', 'ナ', 'é', '\u{301}', '\u{A0}', '\u{2003}', '²', 'Ⅻ', '👩', '\u{200D}', '💻',
+      'a', 'Z', '0', '9', '\'', ' ', '\t', '\n', '\r', ',', '—', '你', '界', '한', '글', 'か',
+      'ナ', 'é', '\u{301}', '\u{A0}', '\u{2003}', '²', 'Ⅻ', '👩', '\u{200D}', '💻',
     ];
     let mut state = 0x4d59_5df4_d0f3_3173_u64;
     let mut text = String::new();
@@ -243,8 +281,7 @@ mod tests {
       state ^= state >> 12;
       state ^= state << 25;
       state ^= state >> 27;
-      let value =
-        (state.wrapping_mul(0x2545_f491_4f6c_dd1d) % 0x11_0000) as u32;
+      let value = (state.wrapping_mul(0x2545_f491_4f6c_dd1d) % 0x11_0000) as u32;
       if let Some(ch) = char::from_u32(value) {
         text.push(ch);
         count += 1;

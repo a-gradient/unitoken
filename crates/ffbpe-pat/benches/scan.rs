@@ -1,7 +1,4 @@
-use criterion::{
-  black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
-  Throughput,
-};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use fancy_regex::Regex;
 use ffbpe_pat::Pattern;
 
@@ -19,6 +16,20 @@ fn bench_scan(c: &mut Criterion) {
     (
       "mixed",
       "Hello 世界! 한글かな العربية १२३ 👩‍💻\r\n".repeat(16_384),
+    ),
+    (
+      "long_ascii",
+      format!("{} {} ", "a".repeat(256), "Z".repeat(256)).repeat(2_048),
+    ),
+    (
+      "code",
+      "  fn parseHTTPResponse(input: &str) -> Result<()> {\n    let camelCase = 123456; // comment\n  }\n"
+        .repeat(16_384),
+    ),
+    (
+      "case_mix",
+      "ABC中文DEF A\u{301}BCdef a中文B HTTPResponse can'ts 'ſtail\r\n\t  "
+        .repeat(16_384),
     ),
   ];
 
