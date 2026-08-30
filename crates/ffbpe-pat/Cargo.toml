@@ -9,6 +9,10 @@ license = "MIT"
 keywords = ["tokenizer", "pretokenizer", "tiktoken"]
 categories = ["text-processing"]
 
+[features]
+default = []
+simd = []
+
 [dependencies]
 regex-syntax = "0.8.8"
 

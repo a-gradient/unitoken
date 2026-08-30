@@ -71,6 +71,31 @@ compiler- and workload-sensitive result, not a general claim that English text
 scans 1.56× faster on every target. The unknown-pattern fallback is unchanged;
 its observed throughput varied by less than 2%.
 
+### Optional AArch64 NEON scanner
+
+On 2026-08-31, a feature-gated NEON follow-up was measured on the same Apple M2
+with Rust 1.97.0. The `simd` feature was disabled for the scalar baseline and
+enabled for the candidate. The checked-in 5 MiB English fixture used 15 timing
+samples; complete token-stream fingerprints matched:
+
+| Harness and pattern | Scalar → NEON (MiB/s) | Speedup |
+|---|---:|---:|
+| Regression, GPT-2 English | 424 → 676 | 1.59× |
+| Criterion, GPT-2 English | 475 → 657 | 1.38× |
+| Criterion, r50k English | 538 → 675 | 1.25× |
+
+The backend activates only when the first 64-byte input window is ASCII. NEON
+classifies letter, digit, space, whitespace, and apostrophe lanes into `u64`
+masks; scalar bit algebra derives token starts and fixes contraction endings.
+Only boundaries through byte 60 are cached so contractions near the batch edge
+return to the scalar scanner. Unicode-led fixtures stay on the scalar backend;
+their timings are therefore controls rather than SIMD speedup claims.
+
+This backend is non-default and AArch64-only. Reproduce the two modes with
+`cargo bench --locked --bench regression -- pretokenizer-scan` and the same
+command plus `--features simd`. The standalone cases use
+`cargo bench -p ffbpe-pat --bench scan` with and without `--features simd`.
+
 ## Unicode-bigram inventory shaping
 
 One release run used a 64 MiB FineWeb2 Chinese fixture and a target vocabulary

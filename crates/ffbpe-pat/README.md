@@ -37,6 +37,27 @@ no overreads, padding requirements, architecture-specific instructions, or new
 dependencies. Unicode properties continue to come from `regex-syntax`, so they
 match the reference regex engine's Unicode version.
 
+## Optional SIMD
+
+The non-default `simd` feature enables a NEON boundary-mask backend on AArch64:
+
+```bash
+cargo bench -p ffbpe-pat --features simd --bench scan -- specialized
+```
+
+For GPT-2 and r50k inputs whose first 64-byte window is ASCII, NEON classifies
+64 bytes into letter, digit, space, whitespace, and apostrophe masks. Scalar
+`u64` algebra derives trustworthy token starts, and the iterator pops cached
+boundaries instead of dispatching and scanning every token independently.
+Contraction endings are corrected before the boundaries are exposed.
+
+The first release is intentionally conservative. Short inputs and inputs whose
+first window contains non-ASCII use the scalar scanner for their full lifetime.
+Later Unicode-containing windows temporarily return to the scalar scanner. The
+feature has no effect on non-AArch64 targets, and disabling it removes all NEON
+code. The AArch64 targets supported by this workspace include NEON as a
+baseline feature, so this backend needs no per-CPU runtime feature check.
+
 The SWAR arithmetic, byte-dispatch strategy, and o200k phase approach are
 adapted from [GigaToken](https://github.com/marcelroed/gigatoken) at commit
 `fac0114b37120ec8a76362e9ee8e1c742aaafaef`, especially
@@ -46,11 +67,12 @@ adapted from [GigaToken](https://github.com/marcelroed/gigatoken) at commit
 [`unicode.rs`](https://github.com/marcelroed/gigatoken/blob/fac0114b37120ec8a76362e9ee8e1c742aaafaef/src/pretokenize/unicode.rs) table-access strategy.
 Its copyright and MIT license are retained in [LICENSE-GIGATOKEN](LICENSE-GIGATOKEN).
 
-GigaToken's 64-byte SIMD boundary masks and buffered span emission remain
-separate optimization candidates. A packed Unicode table was benchmarked but
-not adopted: halving the table size did not offset the added nibble decoding
-cost. Dual-cursor counting and BPE caches do not directly accelerate this
-crate's ordered streaming iterator.
+GigaToken's NEON mask construction and boundary algebra informed the optional
+GPT-2/r50k backend. x86 boundary masks, the cl100k/o200k mask schemes, and
+buffered span emission remain separate optimization candidates. A packed
+Unicode table was benchmarked but not adopted: halving the table size did not
+offset the added nibble decoding cost. Dual-cursor counting and BPE caches do
+not directly accelerate this crate's ordered streaming iterator.
 
 ## Validation
 

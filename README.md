@@ -352,6 +352,10 @@ workspace's [`ffbpe-pat`](crates/ffbpe-pat) crate. It can also be used directly
 when an application needs only zero-copy pretoken ranges or borrowed tokens;
 arbitrary patterns continue through FFBPE's regex fallback.
 
+On AArch64, the non-default `simd` feature enables 64-byte NEON boundary masks
+for ASCII-led GPT-2 and r50k inputs. The portable scanner remains the fallback
+for short, Unicode-led, and non-AArch64 inputs.
+
 ## CLI
 
 The Rust CLI is feature-gated:
