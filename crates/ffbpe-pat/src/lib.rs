@@ -254,6 +254,21 @@ mod tests {
   }
 
   #[test]
+  fn matches_regex_at_dense_unicode_threshold() {
+    for pattern in Pattern::ALL {
+      let regex = Regex::new(pattern.regex()).unwrap();
+      for scalar in ["é", "中", "𐐷"] {
+        for length in 1..=8 {
+          for suffix in ["!", "0", " ASCII", "\u{301}", "👩"] {
+            let text = format!(" {}{suffix}", scalar.repeat(length));
+            assert_compiled_regex_parity(pattern, &regex, &text);
+          }
+        }
+      }
+    }
+  }
+
+  #[test]
   fn matches_regex_on_deterministic_unicode_mix() {
     const ALPHABET: &[char] = &[
       'a', 'Z', '0', '9', '\'', ' ', '\t', '\n', '\r', ',', '—', '你', '界', '한', '글', 'か',

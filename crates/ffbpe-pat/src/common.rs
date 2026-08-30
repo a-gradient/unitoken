@@ -23,6 +23,44 @@ const WHITESPACE: u8 = 1 << 2;
 const O200K_UPPER_OR_SHARED: u8 = 1 << 3;
 const O200K_LOWER_OR_SHARED: u8 = 1 << 4;
 
+#[derive(Clone, Copy)]
+pub(super) struct ClassTable(&'static [u8]);
+
+impl ClassTable {
+  #[inline]
+  pub(super) fn get() -> Self {
+    Self(&CHAR_CLASSES)
+  }
+
+  #[inline(always)]
+  fn flags(self, codepoint: u32) -> u8 {
+    debug_assert!(codepoint <= char::MAX as u32);
+    // SAFETY: UTF-8 decoding only produces Unicode scalar values, and the
+    // table has one entry for every value through `char::MAX`.
+    unsafe { *self.0.get_unchecked(codepoint as usize) }
+  }
+
+  #[inline(always)]
+  fn is_letter(self, codepoint: u32) -> bool {
+    self.flags(codepoint) & LETTER != 0
+  }
+
+  #[inline(always)]
+  fn case_class(self, codepoint: u32) -> CaseClass {
+    case_class_from_flags(self.flags(codepoint))
+  }
+
+  #[inline(always)]
+  pub(super) fn case_class_at(self, text: &str, start: usize) -> (CaseClass, usize) {
+    let bytes = text.as_bytes();
+    debug_assert!(start < bytes.len());
+    debug_assert!(text.is_char_boundary(start));
+    debug_assert!(!bytes[start].is_ascii());
+    let (codepoint, width) = decode_non_ascii(bytes, start);
+    (self.case_class(codepoint), width)
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CharClass {
   Letter,
@@ -75,7 +113,20 @@ pub(super) fn is_other(ch: char) -> bool {
 
 #[inline]
 pub(super) fn case_class(ch: char) -> CaseClass {
-  let flags = CHAR_CLASSES[ch as usize];
+  if ch.is_ascii_uppercase() {
+    return CaseClass::Upper;
+  }
+  if ch.is_ascii_lowercase() {
+    return CaseClass::Lower;
+  }
+  if ch.is_ascii() {
+    return CaseClass::Other;
+  }
+  ClassTable::get().case_class(ch as u32)
+}
+
+#[inline(always)]
+fn case_class_from_flags(flags: u8) -> CaseClass {
   match flags & (O200K_UPPER_OR_SHARED | O200K_LOWER_OR_SHARED) {
     O200K_UPPER_OR_SHARED => CaseClass::Upper,
     O200K_LOWER_OR_SHARED => CaseClass::Lower,
@@ -126,9 +177,44 @@ pub(super) fn scan_while(
 }
 
 #[inline]
-pub(super) fn scan_letters(text: &str, mut start: usize) -> usize {
+pub(super) fn scan_letters(text: &str, start: usize) -> usize {
+  let bytes = text.as_bytes();
+  let start = ascii::scan_letters(bytes, start);
+  if start == bytes.len() || bytes[start].is_ascii() {
+    return start;
+  }
+  scan_unicode_letters(text, start)
+}
+
+// Keep the Unicode state machine out of the frequent ASCII call sites.
+#[inline(never)]
+fn scan_unicode_letters(text: &str, mut start: usize) -> usize {
+  const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+  let bytes = text.as_bytes();
+  let mut classes = None;
   loop {
-    start = ascii::scan_letters(text.as_bytes(), start);
+    // Direct decoding wins on dense multilingual runs, but adds overhead to
+    // short script transitions. Use it only when the next eight bytes are all
+    // non-ASCII; otherwise Rust's UTF-8 iterator handles the short run.
+    if bytes.len() - start >= 8 {
+      let word = u64::from_ne_bytes(bytes[start..start + 8].try_into().unwrap());
+      if word & HIGH_BITS == HIGH_BITS {
+        let classes = *classes.get_or_insert_with(ClassTable::get);
+        while start < bytes.len() && !bytes[start].is_ascii() {
+          let (codepoint, width) = decode_non_ascii(bytes, start);
+          if !classes.is_letter(codepoint) {
+            return start;
+          }
+          start += width;
+        }
+        start = ascii::scan_letters(bytes, start);
+        if start == bytes.len() || bytes[start].is_ascii() {
+          return start;
+        }
+        continue;
+      }
+    }
+
     // Decode a contiguous non-ASCII run without restarting the iterator at
     // each scalar; return to SWAR when ASCII letters resume.
     let mut end = start;
@@ -147,7 +233,39 @@ pub(super) fn scan_letters(text: &str, mut start: usize) -> usize {
     if end == text.len() {
       return end;
     }
-    start = end;
+    start = ascii::scan_letters(bytes, end);
+    if start == bytes.len() || bytes[start].is_ascii() {
+      return start;
+    }
+  }
+}
+
+/// Decode the non-ASCII scalar beginning at `start`.
+///
+/// Callers only pass byte slices borrowed from `str` and maintain `start` at
+/// a character boundary, so the leading byte determines a complete 2-4 byte
+/// sequence contained in `bytes`.
+#[inline(always)]
+fn decode_non_ascii(bytes: &[u8], start: usize) -> (u32, usize) {
+  debug_assert!(start < bytes.len());
+  debug_assert!(bytes[start] >= 0x80);
+  // SAFETY: the function's invariant gives a complete, valid UTF-8 sequence
+  // at `start`; every indexed continuation byte is therefore in bounds.
+  unsafe {
+    let first = u32::from(*bytes.get_unchecked(start));
+    let second = u32::from(*bytes.get_unchecked(start + 1) & 0x3f);
+    if first < 0xe0 {
+      return (((first & 0x1f) << 6) | second, 2);
+    }
+    let third = u32::from(*bytes.get_unchecked(start + 2) & 0x3f);
+    if first < 0xf0 {
+      return (((first & 0x0f) << 12) | (second << 6) | third, 3);
+    }
+    let fourth = u32::from(*bytes.get_unchecked(start + 3) & 0x3f);
+    (
+      ((first & 0x07) << 18) | (second << 12) | (third << 6) | fourth,
+      4,
+    )
   }
 }
 
@@ -337,4 +455,24 @@ fn unicode_class_table() -> Box<[u8]> {
     }
   }
   table.into_boxed_slice()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn non_ascii_decoder_matches_every_unicode_scalar() {
+    let mut buffer = [0_u8; 4];
+    for codepoint in 0x80..=char::MAX as u32 {
+      let Some(ch) = char::from_u32(codepoint) else {
+        continue;
+      };
+      let text = ch.encode_utf8(&mut buffer);
+      assert_eq!(
+        decode_non_ascii(text.as_bytes(), 0),
+        (codepoint, text.len())
+      );
+    }
+  }
 }
