@@ -43,9 +43,25 @@ jobs:
       - name: Build and run Rust tests
         run: cargo test --all --features cli --verbose
 
+      - name: Verify AVX2 test coverage
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        run: grep -qw avx2 /proc/cpuinfo
+
       - name: Test optional SIMD configuration
         if: matrix.python-version == '3.13'
         run: cargo test -p ffbpe-pat --features simd --verbose
+
+      - name: Measure AVX2 throughput
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        run: |
+          cargo bench -p ffbpe-pat --bench scan -- \
+            scan/Gpt2/specialized/english --save-baseline avx2-gpt2-scalar --quick
+          cargo bench -p ffbpe-pat --features simd --bench scan -- \
+            scan/Gpt2/specialized/english --baseline avx2-gpt2-scalar --quick
+          cargo bench -p ffbpe-pat --bench scan -- \
+            scan/R50k/specialized/english --save-baseline avx2-r50k-scalar --quick
+          cargo bench -p ffbpe-pat --features simd --bench scan -- \
+            scan/R50k/specialized/english --baseline avx2-r50k-scalar --quick
 
       - name: Run Rust quickstart
         run: cargo run --example quickstart
