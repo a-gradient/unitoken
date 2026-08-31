@@ -352,8 +352,8 @@ workspace's [`ffbpe-pat`](crates/ffbpe-pat) crate. It can also be used directly
 when an application needs only zero-copy pretoken ranges or borrowed tokens;
 arbitrary patterns continue through FFBPE's regex fallback.
 
-The non-default `simd` feature enables 64-byte boundary masks for GPT-2 and
-r50k inputs that begin with ASCII. It uses NEON on AArch64 and selects AVX2 at
+The non-default `simd` feature enables 64-byte boundary masks for ASCII-led
+GPT-2, r50k, and cl100k inputs. It uses NEON on AArch64 and selects AVX2 at
 runtime on x86_64. The portable scanner remains the fallback for short inputs,
 inputs whose first window contains Unicode, x86_64 CPUs without AVX2, and other
 architectures.

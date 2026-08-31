@@ -29,6 +29,8 @@ pub(super) unsafe fn ascii_masks(pointer: *const u8) -> Option<AsciiMasks> {
     let space = vdupq_n_u8(b' ');
     let whitespace_start = vdupq_n_u8(9);
     let whitespace_width = vdupq_n_u8(4);
+    let carriage_return = vdupq_n_u8(b'\r');
+    let line_feed = vdupq_n_u8(b'\n');
     let apostrophe = vdupq_n_u8(b'\'');
 
     let letters =
@@ -41,12 +43,15 @@ pub(super) unsafe fn ascii_masks(pointer: *const u8) -> Option<AsciiMasks> {
         vcleq_u8(vsubq_u8(chunk, whitespace_start), whitespace_width),
       )
     });
+    let newlines =
+      chunks.map(|chunk| vorrq_u8(vceqq_u8(chunk, carriage_return), vceqq_u8(chunk, line_feed)));
     let apostrophes = chunks.map(|chunk| vceqq_u8(chunk, apostrophe));
     Some(AsciiMasks {
       letters: movemask64(letters),
       digits: movemask64(digits),
       spaces: movemask64(spaces),
       whitespace: movemask64(whitespace),
+      newlines: movemask64(newlines),
       apostrophes: movemask64(apostrophes),
     })
   }
