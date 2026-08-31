@@ -91,10 +91,16 @@ Only boundaries through byte 60 are cached so contractions near the batch edge
 return to the scalar scanner. Unicode-led fixtures stay on the scalar backend;
 their timings are therefore controls rather than SIMD speedup claims.
 
-This backend is non-default and AArch64-only. Reproduce the two modes with
-`cargo bench --locked --bench regression -- pretokenizer-scan` and the same
-command plus `--features simd`. The standalone cases use
-`cargo bench -p ffbpe-pat --bench scan` with and without `--features simd`.
+These measurements cover the non-default AArch64 backend. Reproduce the two
+modes with the regression benchmark, adding `--features simd` for the candidate.
+The standalone cases use `cargo bench -p ffbpe-pat --bench scan` with and
+without `--features simd`.
+
+An x86_64 follow-up adds an AVX2 classifier behind the same feature. It uses the
+same boundary cache and scalar algebra, but selects AVX2 once at iterator
+construction because AVX2 is not an x86_64 baseline feature. Correctness is
+executed on x86_64 CI; throughput will be reported only after a controlled run
+on native x86_64 hardware.
 
 ## Unicode-bigram inventory shaping
 
