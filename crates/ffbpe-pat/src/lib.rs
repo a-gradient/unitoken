@@ -5,12 +5,16 @@
 //! regex fallback for patterns that [`Pattern::recognize`] does not identify.
 
 mod ascii;
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+mod avx2;
 mod cl100k;
 mod common;
 mod gpt2;
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 mod neon;
 mod o200k;
+#[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+mod simd;
 
 use std::{iter::FusedIterator, ops::Range};
 
@@ -66,8 +70,8 @@ impl Pattern {
       pattern: self,
       text,
       start: 0,
-      #[cfg(all(feature = "simd", target_arch = "aarch64"))]
-      neon: neon::BoundaryState::for_text(
+      #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+      simd: simd::BoundaryState::for_text(
         text.as_bytes(),
         matches!(self, Pattern::Gpt2 | Pattern::R50k),
       ),
@@ -97,8 +101,8 @@ pub struct Offsets<'a> {
   pattern: Pattern,
   text: &'a str,
   start: usize,
-  #[cfg(all(feature = "simd", target_arch = "aarch64"))]
-  neon: neon::BoundaryState,
+  #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+  simd: simd::BoundaryState,
 }
 
 impl Iterator for Offsets<'_> {
@@ -109,16 +113,16 @@ impl Iterator for Offsets<'_> {
       return None;
     }
     let start = self.start;
-    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
-    let end = if self.neon.is_enabled() {
+    #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+    let end = if self.simd.is_enabled() {
       self
-        .neon
+        .simd
         .next_end(self.text.as_bytes(), start)
         .unwrap_or_else(|| self.pattern.pretoken_end(self.text, start))
     } else {
       self.pattern.pretoken_end(self.text, start)
     };
-    #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+    #[cfg(not(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64"))))]
     let end = self.pattern.pretoken_end(self.text, start);
     debug_assert!(end > start);
     debug_assert!(self.text.is_char_boundary(end));
