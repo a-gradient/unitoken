@@ -73,7 +73,11 @@ impl Pattern {
       #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
       simd: simd::BoundaryState::for_text(
         text.as_bytes(),
-        matches!(self, Pattern::Gpt2 | Pattern::R50k),
+        match self {
+          Pattern::Gpt2 | Pattern::R50k => Some(simd::SimdScheme::Gpt2),
+          Pattern::Cl100k => Some(simd::SimdScheme::Cl100k),
+          Pattern::O200k => None,
+        },
       ),
     }
   }

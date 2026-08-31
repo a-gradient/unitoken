@@ -49,12 +49,13 @@ supported architecture:
 cargo bench -p ffbpe-pat --features simd --bench scan -- specialized
 ```
 
-For GPT-2 and r50k inputs whose first 64-byte window is ASCII, the selected
-backend classifies 64 bytes into letter, digit, space, whitespace, and
-apostrophe masks. Scalar `u64` algebra derives trustworthy token starts, and the
-iterator pops cached boundaries instead of dispatching and scanning every token
-independently. Contraction endings are corrected before the boundaries are
-exposed.
+For GPT-2, r50k, and cl100k inputs whose first 64-byte window is ASCII, the
+selected backend classifies 64 bytes into letter, digit, space, whitespace,
+newline, and apostrophe masks. GPT-2/r50k use scalar `u64` boundary algebra;
+cl100k uses a dedicated pure-ASCII mask scheme for its three-digit groups,
+broader letter prefix, punctuation CR/LF suffix, and newline-aware whitespace.
+The iterator pops only trustworthy cached boundaries instead of dispatching and
+scanning every token independently.
 
 The implementation is intentionally conservative. Short inputs and inputs whose
 first window contains non-ASCII use the scalar scanner for their full lifetime.
@@ -74,7 +75,7 @@ adapted from [GigaToken](https://github.com/marcelroed/gigatoken) at commit
 Its copyright and MIT license are retained in [LICENSE-GIGATOKEN](LICENSE-GIGATOKEN).
 
 GigaToken's SIMD mask construction and boundary algebra informed the optional
-GPT-2/r50k backends. The cl100k/o200k mask schemes and buffered span emission
+GPT-2/r50k/cl100k backends. Its o200k mask scheme and buffered span emission
 remain separate optimization candidates. A packed Unicode table was benchmarked
 but not adopted: halving the table size did not offset the added nibble decoding
 cost. Dual-cursor counting and BPE caches do not directly accelerate this

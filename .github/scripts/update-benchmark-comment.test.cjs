@@ -218,11 +218,23 @@ test('buildComment renders a comparable trainer delta with legacy BBPE defaults'
     assert.match(comment, /1\.0 MiB per corpus/);
     assert.match(
       comment,
+      /ASCII-led GPT-2, r50k, and cl100k inputs; Chinese rows are scalar controls/,
+    );
+    assert.match(
+      comment,
       /GPT-2 — english \| 0\.88 ms \| 0\.97 ms \| \+10\.0% \| 1\.25×/,
     );
     assert.match(
       comment,
+      /cl100k — english \| 0\.88 ms \| 0\.97 ms \| \+10\.0% \| 1\.25×/,
+    );
+    assert.match(
+      comment,
       /GPT-2 — chinese \(scalar control\) \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 1\.00×/,
+    );
+    assert.match(
+      comment,
+      /cl100k — chinese \(scalar control\) \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 1\.00×/,
     );
     assert.match(comment, /unknown fallback — chinese/);
     assert.doesNotMatch(comment, /Codec — Unicode BBPE/);

@@ -30,6 +30,8 @@ pub(super) unsafe fn ascii_masks(pointer: *const u8) -> Option<AsciiMasks> {
     let space = _mm256_set1_epi8(b' ' as i8);
     let before_whitespace = _mm256_set1_epi8(8);
     let after_whitespace = _mm256_set1_epi8(14);
+    let carriage_return = _mm256_set1_epi8(b'\r' as i8);
+    let line_feed = _mm256_set1_epi8(b'\n' as i8);
     let apostrophe = _mm256_set1_epi8(b'\'' as i8);
 
     let letters = chunks.map(|chunk| {
@@ -53,12 +55,19 @@ pub(super) unsafe fn ascii_masks(pointer: *const u8) -> Option<AsciiMasks> {
       );
       _mm256_or_si256(_mm256_cmpeq_epi8(chunk, space), control)
     });
+    let newlines = chunks.map(|chunk| {
+      _mm256_or_si256(
+        _mm256_cmpeq_epi8(chunk, carriage_return),
+        _mm256_cmpeq_epi8(chunk, line_feed),
+      )
+    });
     let apostrophes = chunks.map(|chunk| _mm256_cmpeq_epi8(chunk, apostrophe));
     Some(AsciiMasks {
       letters: movemask64(letters),
       digits: movemask64(digits),
       spaces: movemask64(spaces),
       whitespace: movemask64(whitespace),
+      newlines: movemask64(newlines),
       apostrophes: movemask64(apostrophes),
     })
   }

@@ -43,9 +43,9 @@ The automated PR report scans 5 MiB per corpus with nine paired samples using
 the default build on both revisions, then repeats the scan with `--features
 simd` as a separate report. Its SIMD section compares the feature builds across
 revisions and the PR's scalar and feature builds on the same inputs. The report
-records whether AVX2, NEON, or only the scalar fallback was available. GPT-2
-and r50k are reported separately; Chinese rows are controls because their
-leading non-ASCII window disables the optional ASCII SIMD backend. The
+records whether AVX2, NEON, or only the scalar fallback was available. GPT-2,
+r50k, and cl100k are reported separately; Chinese rows are controls because
+their leading non-ASCII window disables the optional ASCII SIMD backend. The
 read-only benchmark job also renders the candidate report into its job summary
 so renderer changes can be reviewed before their trusted comment renderer
 reaches `master`.
@@ -96,11 +96,13 @@ samples; complete token-stream fingerprints matched:
 | Criterion, r50k English | 538 → 675 | 1.25× |
 
 The backend activates only when the first 64-byte input window is ASCII. NEON
-classifies letter, digit, space, whitespace, and apostrophe lanes into `u64`
-masks; scalar bit algebra derives token starts and fixes contraction endings.
-Only boundaries through byte 60 are cached so contractions near the batch edge
-return to the scalar scanner. Unicode-led fixtures stay on the scalar backend;
-their timings are therefore controls rather than SIMD speedup claims.
+classifies letter, digit, space, whitespace, newline, and apostrophe lanes into
+`u64` masks. GPT-2/r50k use scalar bit algebra; cl100k uses a separate
+pure-ASCII mask scheme so its three-digit groups, optional prefixes, punctuation
+CR/LF suffixes, and newline-aware whitespace retain scalar semantics. Only
+boundaries through byte 60 are cached so edge-sensitive tokens return to the
+scalar scanner. Unicode-led fixtures stay on the scalar backend; their timings
+are therefore controls rather than SIMD speedup claims.
 
 These measurements cover the non-default AArch64 backend. Reproduce the two
 modes with the regression benchmark, adding `--features simd` for the candidate.
