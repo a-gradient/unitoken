@@ -79,6 +79,7 @@ inherits = "release"
 [features]
 default = []
 hotpath = ["hotpath/hotpath", "hotpath/hotpath-alloc"]
+simd = ["ffbpe-pat/simd"]
 
 fmt-npz = ["npyz/npz"]
 
