@@ -26,6 +26,26 @@ write_report() {
     }' > "$output_dir/$relative_path"
 }
 
+write_scan_report() {
+  local output_dir=$1
+  local relative_path=$2
+  local simd_feature_enabled=$3
+  local available_simd_backend=$4
+  local temporary_report
+
+  write_report "$output_dir" "$relative_path" \
+    unitoken_pretokenizer_scan_regression_v1
+  temporary_report=$(mktemp "$temporary_dir/scan-report.XXXXXX")
+  jq \
+    --argjson enabled "$simd_feature_enabled" \
+    --arg backend "$available_simd_backend" \
+    '.build = {
+      simd_feature_enabled: $enabled,
+      available_simd_backend: $backend
+    }' "$output_dir/$relative_path" > "$temporary_report"
+  mv "$temporary_report" "$output_dir/$relative_path"
+}
+
 write_complete_report_set() {
   local output_dir=$1
 
@@ -34,8 +54,8 @@ write_complete_report_set() {
   write_report "$output_dir" codec-byte.json unitoken_codec_regression_v1
   write_report "$output_dir" codec-unicode.json unitoken_codec_regression_v1
   write_report "$output_dir" codec-unicode-bbpe.json unitoken_codec_regression_v1
-  write_report "$output_dir" pretokenizer-scan.json \
-    unitoken_pretokenizer_scan_regression_v1
+  write_scan_report "$output_dir" pretokenizer-scan.json false scalar
+  write_scan_report "$output_dir" pretokenizer-scan-simd.json true avx2
 }
 
 pad_report_to_size() {
@@ -82,6 +102,10 @@ mv "$baseline/pretokenizer-scan.json" "$baseline/pretokenizer-scan-renamed.json"
 bash "$validator" "$baseline" "$candidate"
 mv "$baseline/pretokenizer-scan-renamed.json" "$baseline/pretokenizer-scan.json"
 
+mv "$baseline/pretokenizer-scan-simd.json" "$baseline/pretokenizer-scan-simd-renamed.json"
+bash "$validator" "$baseline" "$candidate"
+mv "$baseline/pretokenizer-scan-simd-renamed.json" "$baseline/pretokenizer-scan-simd.json"
+
 mv "$baseline/codec-unicode-bbpe.json" "$baseline/codec-unicode-bbpe-renamed.json"
 bash "$validator" "$baseline" "$candidate"
 ln -s codec-unicode-bbpe-renamed.json "$baseline/codec-unicode-bbpe.json"
@@ -104,6 +128,11 @@ mv "$candidate/pretokenizer-scan.json" "$candidate/pretokenizer-scan-renamed.jso
 expect_failure "candidate benchmark report is missing or not a regular file: pretokenizer-scan.json" \
   bash "$validator" "$baseline" "$candidate"
 mv "$candidate/pretokenizer-scan-renamed.json" "$candidate/pretokenizer-scan.json"
+
+mv "$candidate/pretokenizer-scan-simd.json" "$candidate/pretokenizer-scan-simd-renamed.json"
+expect_failure "candidate benchmark report is missing or not a regular file: pretokenizer-scan-simd.json" \
+  bash "$validator" "$baseline" "$candidate"
+mv "$candidate/pretokenizer-scan-simd-renamed.json" "$candidate/pretokenizer-scan-simd.json"
 
 mv "$candidate/pretokenizer.json" "$candidate/pretokenizer-target.json"
 ln -s pretokenizer-target.json "$candidate/pretokenizer.json"
@@ -128,6 +157,12 @@ expect_failure "candidate benchmark report has an invalid structure or failed ga
 
 write_report "$candidate" codec-byte.json unitoken_pretokenizer_regression_v1
 expect_failure "candidate benchmark report has an invalid structure or failed gates: codec-byte.json" \
+  bash "$validator" "$baseline" "$candidate"
+
+jq '.build.simd_feature_enabled = false' \
+  "$candidate/pretokenizer-scan-simd.json" > "$candidate/pretokenizer-scan-simd-invalid.json"
+mv "$candidate/pretokenizer-scan-simd-invalid.json" "$candidate/pretokenizer-scan-simd.json"
+expect_failure "candidate PAT scan report has the wrong build configuration: pretokenizer-scan-simd.json" \
   bash "$validator" "$baseline" "$candidate"
 
 echo "benchmark report contract tests passed"

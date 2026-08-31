@@ -81,11 +81,18 @@ struct ScanGates {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct ScanBuild {
+  simd_feature_enabled: bool,
+  available_simd_backend: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct ScanReport {
   schema_version: u64,
   contract: String,
   generated_at_unix_seconds: u64,
   environment: EnvironmentReport,
+  build: ScanBuild,
   samples: Vec<ScanSample>,
   gates: ScanGates,
 }
@@ -182,14 +189,23 @@ pub fn run(args: Args) -> Result<(), String> {
     contract: CONTRACT.to_string(),
     generated_at_unix_seconds: now_seconds(),
     environment,
+    build: ScanBuild {
+      simd_feature_enabled: cfg!(feature = "simd"),
+      available_simd_backend: available_simd_backend(),
+    },
     samples,
     gates: ScanGates {
       passed: failures.is_empty(),
       failures,
     },
   };
+  let default_report_name = if cfg!(feature = "simd") {
+    "pretokenizer-scan-simd"
+  } else {
+    "pretokenizer-scan"
+  };
   let output = args.output.unwrap_or_else(|| {
-    default_suite_report_path("pretokenizer-scan", &report.environment)
+    default_suite_report_path(default_report_name, &report.environment)
   });
   validate_output_path(&output, manifest_dir)?;
   write_json_atomic(&output, &report)?;
@@ -203,6 +219,28 @@ pub fn run(args: Args) -> Result<(), String> {
       output.display()
     ))
   }
+}
+
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+fn available_simd_backend() -> &'static str {
+  "neon"
+}
+
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn available_simd_backend() -> &'static str {
+  if std::is_x86_feature_detected!("avx2") {
+    "avx2"
+  } else {
+    "scalar"
+  }
+}
+
+#[cfg(not(all(
+  feature = "simd",
+  any(target_arch = "aarch64", target_arch = "x86_64")
+)))]
+fn available_simd_backend() -> &'static str {
+  "scalar"
 }
 
 fn validate_output_path(output: &Path, manifest_dir: &Path) -> Result<(), String> {
@@ -336,7 +374,12 @@ impl TokenFingerprintBuilder {
 }
 
 fn print_summary(path: &Path, report: &ScanReport) {
-  println!("pretokenizer scan report: {}", path.display());
+  println!(
+    "pretokenizer scan report: {} (simd_feature_enabled={}, available_simd_backend={})",
+    path.display(),
+    report.build.simd_feature_enabled,
+    report.build.available_simd_backend,
+  );
   for (pattern_name, _) in PATTERNS {
     for (dataset_name, _) in DATASETS {
       let matching = report.samples.iter().filter(|sample| {

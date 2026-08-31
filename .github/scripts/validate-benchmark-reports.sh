@@ -55,6 +55,26 @@ validate_optional_report() {
   validate_report "$revision" "$output_dir" "$relative_path" "$expected_contract"
 }
 
+validate_scan_build() {
+  local output_dir=$1
+  local relative_path=$2
+  local simd_feature_enabled=$3
+  local report="$output_dir/$relative_path"
+
+  if [[ ! -f "$report" ]]; then
+    return 0
+  fi
+  if ! jq -e --argjson enabled "$simd_feature_enabled" '
+    .build.simd_feature_enabled == $enabled
+      and (.build.available_simd_backend
+        | . == "scalar" or . == "avx2" or . == "neon")
+      and ($enabled or .build.available_simd_backend == "scalar")
+  ' "$report" >/dev/null; then
+    echo "candidate PAT scan report has the wrong build configuration: $relative_path" >&2
+    return 1
+  fi
+}
+
 status=0
 for revision in baseline candidate; do
   if [[ "$revision" == baseline ]]; then
@@ -81,5 +101,11 @@ validate_optional_report baseline "$baseline_dir" pretokenizer-scan.json \
   unitoken_pretokenizer_scan_regression_v1 || status=1
 validate_report candidate "$candidate_dir" pretokenizer-scan.json \
   unitoken_pretokenizer_scan_regression_v1 || status=1
+validate_scan_build "$candidate_dir" pretokenizer-scan.json false || status=1
+validate_optional_report baseline "$baseline_dir" pretokenizer-scan-simd.json \
+  unitoken_pretokenizer_scan_regression_v1 || status=1
+validate_report candidate "$candidate_dir" pretokenizer-scan-simd.json \
+  unitoken_pretokenizer_scan_regression_v1 || status=1
+validate_scan_build "$candidate_dir" pretokenizer-scan-simd.json true || status=1
 
 exit "$status"

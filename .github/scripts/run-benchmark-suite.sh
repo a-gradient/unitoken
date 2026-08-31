@@ -10,6 +10,8 @@ fi
 checkout=$1
 output_dir=$2
 suite_config=$3
+scan_max_bytes=$((5 * 1024 * 1024))
+scan_repeats=9
 
 mkdir -p "$output_dir"
 cd "$checkout"
@@ -31,5 +33,15 @@ cargo bench --bench regression -- suite \
 # by the validator once the command exists in that checkout.
 if [[ -f benches/regression/scan.rs ]]; then
   cargo bench --bench regression -- pretokenizer-scan \
+    --max-bytes "$scan_max_bytes" \
+    --repeats "$scan_repeats" \
     --output "$output_dir/pretokenizer-scan.json"
+
+  # Keep this separate from the default report: default-build regressions and
+  # optional SIMD regressions answer different questions. The report records
+  # whether this build can actually use AVX2, NEON, or only the scalar fallback.
+  cargo bench --features simd --bench regression -- pretokenizer-scan \
+    --max-bytes "$scan_max_bytes" \
+    --repeats "$scan_repeats" \
+    --output "$output_dir/pretokenizer-scan-simd.json"
 fi
