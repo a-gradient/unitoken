@@ -44,9 +44,9 @@ the default build on both revisions, then repeats the scan with `--features
 simd` as a separate report. Its SIMD section compares the feature builds across
 revisions and the PR's scalar and feature builds on the same inputs. The report
 records whether AVX2, NEON, or only the scalar fallback was available. GPT-2,
-r50k, and cl100k are reported separately; Chinese rows are controls because
-their leading non-ASCII window disables the optional ASCII SIMD backend. The
-read-only benchmark job also renders the candidate report into its job summary
+r50k, cl100k, and o200k are reported separately; Chinese rows are controls
+because their leading non-ASCII window disables the optional ASCII SIMD backend.
+The read-only benchmark job also renders the candidate report into its job summary
 so renderer changes can be reviewed before their trusted comment renderer
 reaches `master`.
 
@@ -95,14 +95,26 @@ samples; complete token-stream fingerprints matched:
 | Criterion, GPT-2 English | 475 → 657 | 1.38× |
 | Criterion, r50k English | 538 → 675 | 1.25× |
 
+The o200k extension was measured separately on the same Apple M2 with the 5 MiB
+English fixture and nine paired samples:
+
+| Harness and pattern | Scalar → NEON (MiB/s) | Speedup |
+|---|---:|---:|
+| Regression, o200k English | 346 → 508 | 1.47× |
+
+Scalar and NEON produced the same 1,233,584-token fingerprint; the Chinese
+control was unchanged within noise (594.0 → 593.5 MiB/s).
+
 The backend activates only when the first 64-byte input window is ASCII. NEON
 classifies letter, digit, space, whitespace, newline, and apostrophe lanes into
 `u64` masks. GPT-2/r50k use scalar bit algebra; cl100k uses a separate
 pure-ASCII mask scheme so its three-digit groups, optional prefixes, punctuation
-CR/LF suffixes, and newline-aware whitespace retain scalar semantics. Only
-boundaries through byte 60 are cached so edge-sensitive tokens return to the
-scalar scanner. Unicode-led fixtures stay on the scalar backend; their timings
-are therefore controls rather than SIMD speedup claims.
+CR/LF suffixes, and newline-aware whitespace retain scalar semantics. o200k
+uses a separate pass with uppercase and slash masks for case transitions,
+word-attached contractions, and CR/LF/slash punctuation tails. Only boundaries
+through byte 60 are cached so edge-sensitive tokens return to the scalar
+scanner. Unicode-led fixtures stay on the scalar backend; their timings are
+therefore controls rather than SIMD speedup claims.
 
 These measurements cover the non-default AArch64 backend. Reproduce the two
 modes with the regression benchmark, adding `--features simd` for the candidate.

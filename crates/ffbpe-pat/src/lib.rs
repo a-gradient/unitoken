@@ -76,7 +76,7 @@ impl Pattern {
         match self {
           Pattern::Gpt2 | Pattern::R50k => Some(simd::SimdScheme::Gpt2),
           Pattern::Cl100k => Some(simd::SimdScheme::Cl100k),
-          Pattern::O200k => None,
+          Pattern::O200k => Some(simd::SimdScheme::O200k),
         },
       ),
     }

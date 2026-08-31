@@ -17,11 +17,29 @@ pub(super) struct AsciiMasks {
   pub(super) apostrophes: u64,
 }
 
+/// O200k-specific ASCII classifications.
+///
+/// These deliberately live outside [`AsciiMasks`]. GPT-2/r50k and cl100k do
+/// not need strict case or slash information, so their vector classifiers can
+/// avoid the extra comparisons and mask extractions.
+#[derive(Clone, Copy)]
+pub(super) struct O200kAsciiMasks {
+  pub(super) letters: u64,
+  pub(super) uppercase: u64,
+  pub(super) digits: u64,
+  pub(super) spaces: u64,
+  pub(super) whitespace: u64,
+  pub(super) newlines: u64,
+  pub(super) apostrophes: u64,
+  pub(super) slashes: u64,
+}
+
 /// PAT families whose ASCII boundaries can be derived from the shared masks.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum SimdScheme {
   Gpt2,
   Cl100k,
+  O200k,
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +69,21 @@ impl Classifier {
       // SAFETY: `Classifier` can be constructed only after AVX2 detection and
       // the caller supplies 64 readable bytes.
       unsafe { crate::avx2::ascii_masks(pointer) }
+    }
+  }
+
+  unsafe fn classify_o200k(self, pointer: *const u8) -> Option<O200kAsciiMasks> {
+    #[cfg(target_arch = "aarch64")]
+    {
+      // SAFETY: NEON is a baseline AArch64 feature and the caller supplies 64
+      // readable bytes.
+      unsafe { crate::neon::o200k_ascii_masks(pointer) }
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+      // SAFETY: `Classifier` can be constructed only after AVX2 detection and
+      // the caller supplies 64 readable bytes.
+      unsafe { crate::avx2::o200k_ascii_masks(pointer) }
     }
   }
 }
@@ -167,11 +200,26 @@ fn token_starts(
   // SAFETY: the caller provides 64 readable bytes. `Classifier` instances are
   // constructed only when their platform CPU requirements hold.
   let window = &bytes[start..start + BATCH_BYTES];
-  let masks = unsafe { classifier.classify(window.as_ptr()) }?;
-  Some(match scheme {
-    SimdScheme::Gpt2 => gpt2_token_starts(window, masks),
-    SimdScheme::Cl100k => cl100k_token_starts(window, masks),
-  })
+  match scheme {
+    SimdScheme::Gpt2 => {
+      // SAFETY: `window` supplies 64 readable bytes and `classifier` has the
+      // necessary CPU feature check.
+      let masks = unsafe { classifier.classify(window.as_ptr()) }?;
+      Some(gpt2_token_starts(window, masks))
+    }
+    SimdScheme::Cl100k => {
+      // SAFETY: `window` supplies 64 readable bytes and `classifier` has the
+      // necessary CPU feature check.
+      let masks = unsafe { classifier.classify(window.as_ptr()) }?;
+      Some(cl100k_token_starts(window, masks))
+    }
+    SimdScheme::O200k => {
+      // SAFETY: `window` supplies 64 readable bytes and `classifier` has the
+      // necessary CPU feature check.
+      let masks = unsafe { classifier.classify_o200k(window.as_ptr()) }?;
+      Some(o200k_token_starts(window, masks))
+    }
+  }
 }
 
 fn gpt2_token_starts(bytes: &[u8], masks: AsciiMasks) -> u64 {
@@ -249,37 +297,14 @@ fn cl100k_token_starts(bytes: &[u8], masks: AsciiMasks) -> u64 {
   // Newlines directly after punctuation belong to the punctuation token.
   let absorbed_newlines = smear_up(linebreaks & (other << 1), linebreaks);
   let whitespace = masks.whitespace & !absorbed_newlines;
-  let mut whitespace_starts = whitespace & (!(whitespace << 1) | (!whitespace >> 1));
-
-  // A whitespace run containing a newline ends at its last newline. Its
-  // remaining newline-free tail follows the normal "split before the last
-  // whitespace byte" rule when it ends within this window.
-  let mut newline_runs = linebreaks & whitespace;
-  while newline_runs != 0 {
-    let first_newline = newline_runs.trailing_zeros() as usize;
-    let start = whitespace_run_start(whitespace, first_newline);
-    let end = run_end(whitespace, start);
-    let run = bit_range(start, end);
-    whitespace_starts &= !run;
-    whitespace_starts |= 1_u64 << start;
-
-    let last_newline = 63 - (linebreaks & run).leading_zeros() as usize;
-    let tail_start = last_newline + 1;
-    if tail_start < end {
-      whitespace_starts |= 1_u64 << tail_start;
-      if end < BATCH_BYTES && end - tail_start > 1 {
-        whitespace_starts |= 1_u64 << (end - 1);
-      }
-    }
-    newline_runs &= !run;
-  }
+  let whitespace_starts = newline_aware_whitespace_starts(whitespace, linebreaks);
 
   let mut starts = letter_starts | digit_starts | punctuation_starts | whitespace_starts | 1;
   let mut contractions = masks.apostrophes & starts & TRUSTED_BITS;
   while contractions != 0 {
     let offset = contractions.trailing_zeros() as usize;
     contractions &= contractions - 1;
-    if let Some(length) = cl100k_contraction_len(bytes, offset) {
+    if let Some(length) = ascii_contraction_len(bytes, offset) {
       starts &= !(1_u64 << (offset + 1));
       starts |= 1_u64 << (offset + length);
     }
@@ -288,7 +313,7 @@ fn cl100k_token_starts(bytes: &[u8], masks: AsciiMasks) -> u64 {
 }
 
 #[inline(always)]
-fn cl100k_contraction_len(bytes: &[u8], offset: usize) -> Option<usize> {
+fn ascii_contraction_len(bytes: &[u8], offset: usize) -> Option<usize> {
   let first = bytes.get(offset + 1)?.to_ascii_lowercase();
   match first {
     b's' | b'd' | b'm' | b't' => Some(2),
@@ -297,6 +322,77 @@ fn cl100k_contraction_len(bytes: &[u8], offset: usize) -> Option<usize> {
     b'r' if ascii_case_eq(bytes.get(offset + 2), b'e') => Some(3),
     _ => None,
   }
+}
+
+/// Derive o200k boundaries from one all-ASCII window.
+///
+/// O200k shares cl100k's optional-prefix, digit, and whitespace structure,
+/// but its words split before an uppercase letter following a lowercase one.
+/// Its contractions are attached to a word, and punctuation absorbs a
+/// `\r`, `\n`, or `/` tail after the first newline. The cache always begins at
+/// a known token boundary and discards right-edge starts, leaving every
+/// cross-window ambiguity to the scalar scanner.
+#[inline(always)]
+fn o200k_token_starts(bytes: &[u8], masks: O200kAsciiMasks) -> u64 {
+  let letters = masks.letters;
+  let uppercase = masks.uppercase;
+  let lowercase = letters & !uppercase;
+  let digits = masks.digits;
+  let spaces = masks.spaces;
+  let linebreaks = masks.newlines;
+  let tab_whitespace = masks.whitespace & !spaces & !linebreaks;
+  let other = !(letters | digits | masks.whitespace);
+
+  // ` ?[^\s\p{L}\p{N}]+[\r\n/]*`: the slash is ordinary punctuation
+  // until a newline begins the tail. Exclude an absorbed tail from every
+  // other-class rule so it cannot start a separate punctuation token.
+  let tail_class = linebreaks | masks.slashes;
+  let absorbed_tail = smear_up(linebreaks & (other << 1), tail_class);
+  let other = other & !absorbed_tail;
+
+  // The optional word prefix is the same ASCII rule as cl100k. A strict
+  // uppercase byte after a strict lowercase byte begins the next o200k word
+  // (`camelCase`), while an uppercase run followed by lowercase stays whole
+  // (`HTTPResponse`).
+  let previous_letters = letters << 1;
+  let previous_spaces = spaces << 1;
+  let previous_tab_whitespace = tab_whitespace << 1;
+  let previous_other = other << 1;
+  let two_back_space_or_other = (spaces | other) << 2;
+  let letter_starts = (letters
+    & !previous_letters
+    & !previous_spaces
+    & !previous_tab_whitespace
+    & !(previous_other & !two_back_space_or_other))
+    | (uppercase & (lowercase << 1));
+
+  let digit_starts = cl100k_digit_starts(digits);
+  let punctuation_starts = other & !(other << 1) & !(spaces << 1);
+
+  let whitespace = masks.whitespace & !absorbed_tail;
+  let whitespace_starts = newline_aware_whitespace_starts(whitespace, linebreaks);
+
+  let mut starts = letter_starts | digit_starts | punctuation_starts | whitespace_starts | 1;
+  let mut contractions = masks.apostrophes & starts & (letters << 1) & TRUSTED_BITS;
+  let mut forced_boundary = None;
+  while contractions != 0 {
+    let offset = contractions.trailing_zeros() as usize;
+    contractions &= contractions - 1;
+    if forced_boundary == Some(offset) {
+      // The preceding suffix already belongs to the prior word: `x'll'd`
+      // splits into `x'll` and `'d` rather than attaching both suffixes.
+      continue;
+    }
+    if let Some(length) = ascii_contraction_len(bytes, offset) {
+      // Unlike cl100k, this suffix extends the preceding word. Remove the
+      // punctuation boundary and any lower-to-upper split inside the suffix.
+      starts &= !(1_u64 << offset);
+      starts &= !bit_range(offset + 1, offset + length);
+      starts |= 1_u64 << (offset + length);
+      forced_boundary = Some(offset + length);
+    }
+  }
+  starts
 }
 
 #[inline(always)]
@@ -313,6 +409,33 @@ fn cl100k_digit_starts(digits: u64) -> u64 {
     starts |= (starts & continues_for_three) << shift;
     continues_for_three &= continues_for_three >> shift;
     shift <<= 1;
+  }
+  starts
+}
+
+/// Derive whitespace-token starts after any punctuation-tail bytes have been
+/// removed from the whitespace mask.
+#[inline(always)]
+fn newline_aware_whitespace_starts(whitespace: u64, linebreaks: u64) -> u64 {
+  let mut starts = whitespace & (!(whitespace << 1) | (!whitespace >> 1));
+  let mut newline_runs = linebreaks & whitespace;
+  while newline_runs != 0 {
+    let first_newline = newline_runs.trailing_zeros() as usize;
+    let start = whitespace_run_start(whitespace, first_newline);
+    let end = run_end(whitespace, start);
+    let run = bit_range(start, end);
+    starts &= !run;
+    starts |= 1_u64 << start;
+
+    let last_newline = 63 - (linebreaks & run).leading_zeros() as usize;
+    let tail_start = last_newline + 1;
+    if tail_start < end {
+      starts |= 1_u64 << tail_start;
+      if end < BATCH_BYTES && end - tail_start > 1 {
+        starts |= 1_u64 << (end - 1);
+      }
+    }
+    newline_runs &= !run;
   }
   starts
 }
@@ -424,10 +547,13 @@ mod tests {
   }
 
   fn random_ascii_text(len: usize) -> String {
+    random_ascii_text_from_seed(len, 0x9e37_79b9_7f4a_7c15)
+  }
+
+  fn random_ascii_text_from_seed(len: usize, mut random: u64) -> String {
     const ALPHABET: &[u8] =
       b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '!?_-/\t\n\r\x0b\x0c";
     let mut bytes = Vec::with_capacity(len);
-    let mut random = 0x9e37_79b9_7f4a_7c15_u64;
     for _ in 0..len {
       random ^= random >> 12;
       random ^= random << 25;
@@ -447,6 +573,10 @@ mod tests {
     );
     assert_eq!(
       BoundaryState::for_text(&ascii, Some(SimdScheme::Cl100k)).is_enabled(),
+      available
+    );
+    assert_eq!(
+      BoundaryState::for_text(&ascii, Some(SimdScheme::O200k)).is_enabled(),
       available
     );
     assert!(!BoundaryState::for_text(&ascii, None).is_enabled());
@@ -486,6 +616,35 @@ mod tests {
         " later words 1234?!\r\n".repeat(4)
       );
       assert_mask_starts_match_scalar(&text, SimdScheme::Cl100k, crate::cl100k::pretoken_end);
+    }
+  }
+
+  #[test]
+  fn o200k_masks_match_scalar_token_starts_at_every_edge() {
+    const CASE: &str = concat!(
+      "camelCase HTTPResponse ABCdefGHI aBc ABcD zZ ",
+      "!word !!word  word \tword \rword \nword ",
+      "can't IT'S we're I'LL x'll'd don't's 3's 3'ts ",
+      "1 12 123 1234 1234567890 ",
+      "!foo ?!bar !\r\n//word /\r\n/ next a//b .\n//x ",
+      "a  b\t c\r\nd\n\n e\r\r\nf trailing \t  "
+    );
+    for lead in 0..64 {
+      let text = format!(
+        "{}{}{}",
+        "a\n".repeat(lead),
+        CASE,
+        " later words 1234?!\r\n".repeat(4)
+      );
+      assert_mask_starts_match_scalar(&text, SimdScheme::O200k, crate::o200k::pretoken_end);
+    }
+  }
+
+  #[test]
+  fn o200k_masks_match_scalar_on_random_ascii_windows() {
+    for seed in 1..=64_u64 {
+      let text = random_ascii_text_from_seed(256, seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+      assert_mask_starts_match_scalar(&text, SimdScheme::O200k, crate::o200k::pretoken_end);
     }
   }
 
@@ -533,6 +692,59 @@ mod tests {
   }
 
   #[test]
+  fn o200k_classifies_every_ascii_byte() {
+    let Some(classifier) = Classifier::detect() else {
+      return;
+    };
+    let bytes = (0_u8..=127).collect::<Vec<_>>();
+    for batch_start in [0, BATCH_BYTES] {
+      // SAFETY: each batch contains 64 readable bytes and `Classifier`
+      // instances exist only when their platform requirements hold.
+      let masks = unsafe { classifier.classify_o200k(bytes.as_ptr().add(batch_start)) }.unwrap();
+      for offset in 0..BATCH_BYTES {
+        let byte = bytes[batch_start + offset];
+        let bit = 1_u64 << offset;
+        assert_eq!(
+          masks.letters & bit != 0,
+          byte.is_ascii_alphabetic(),
+          "letters byte={byte}"
+        );
+        assert_eq!(
+          masks.uppercase & bit != 0,
+          byte.is_ascii_uppercase(),
+          "uppercase byte={byte}"
+        );
+        assert_eq!(
+          masks.digits & bit != 0,
+          byte.is_ascii_digit(),
+          "digits byte={byte}"
+        );
+        assert_eq!(masks.spaces & bit != 0, byte == b' ', "spaces byte={byte}");
+        assert_eq!(
+          masks.whitespace & bit != 0,
+          byte == b' ' || (9..=13).contains(&byte),
+          "whitespace byte={byte}"
+        );
+        assert_eq!(
+          masks.newlines & bit != 0,
+          matches!(byte, b'\r' | b'\n'),
+          "newlines byte={byte}"
+        );
+        assert_eq!(
+          masks.apostrophes & bit != 0,
+          byte == b'\'',
+          "apostrophes byte={byte}"
+        );
+        assert_eq!(
+          masks.slashes & bit != 0,
+          byte == b'/',
+          "slashes byte={byte}"
+        );
+      }
+    }
+  }
+
+  #[test]
   fn classifier_rejects_non_ascii_windows() {
     let Some(classifier) = Classifier::detect() else {
       return;
@@ -543,6 +755,9 @@ mod tests {
       // SAFETY: the array provides 64 readable bytes and `Classifier`
       // instances exist only when their platform requirements hold.
       assert!(unsafe { classifier.classify(bytes.as_ptr()) }.is_none());
+      // SAFETY: the array provides 64 readable bytes and `Classifier`
+      // instances exist only when their platform requirements hold.
+      assert!(unsafe { classifier.classify_o200k(bytes.as_ptr()) }.is_none());
       bytes[offset] = b'a';
     }
   }
@@ -566,11 +781,56 @@ mod tests {
   }
 
   #[test]
+  fn o200k_boundary_state_matches_scalar_on_ascii_and_unicode_streams() {
+    let mut text = random_ascii_text(32_768);
+    text.push_str("中文后继续 camelCase can't !\r\n// 123456 ");
+    text.push_str(&random_ascii_text(4_096));
+    let cached =
+      assert_boundary_state_matches_scalar(&text, SimdScheme::O200k, crate::o200k::pretoken_end);
+    assert!(cached > 1_000, "boundary cache did not engage often enough");
+  }
+
+  #[test]
   fn cl100k_boundary_state_matches_scalar_for_every_ascii_transition() {
     let bytes = (0_u8..=127).cycle().take(8_192).collect::<Vec<_>>();
     let text = String::from_utf8(bytes).unwrap();
     let cached =
       assert_boundary_state_matches_scalar(&text, SimdScheme::Cl100k, crate::cl100k::pretoken_end);
     assert!(cached > 100, "boundary cache did not engage often enough");
+  }
+
+  #[test]
+  fn o200k_boundary_state_matches_scalar_for_every_ascii_transition() {
+    let bytes = (0_u8..=127).cycle().take(8_192).collect::<Vec<_>>();
+    let text = String::from_utf8(bytes).unwrap();
+    let cached =
+      assert_boundary_state_matches_scalar(&text, SimdScheme::O200k, crate::o200k::pretoken_end);
+    assert!(cached > 100, "boundary cache did not engage often enough");
+  }
+
+  #[test]
+  fn o200k_cache_keeps_only_local_right_edge_boundaries() {
+    if Classifier::detect().is_none() {
+      return;
+    }
+
+    let boundary_at_sixty = format!("{}BZZ next tokens", "a".repeat(60));
+    let mut state = BoundaryState::for_text(boundary_at_sixty.as_bytes(), Some(SimdScheme::O200k));
+    assert_eq!(state.next_end(boundary_at_sixty.as_bytes(), 0), Some(60));
+
+    let contraction_after_sixty = format!("{}'S next tokens", "a".repeat(59));
+    let mut state =
+      BoundaryState::for_text(contraction_after_sixty.as_bytes(), Some(SimdScheme::O200k));
+    assert_eq!(state.next_end(contraction_after_sixty.as_bytes(), 0), None);
+
+    let punctuation_tail_after_sixty = format!("{}\r\n//word next tokens", "!".repeat(59));
+    let mut state = BoundaryState::for_text(
+      punctuation_tail_after_sixty.as_bytes(),
+      Some(SimdScheme::O200k),
+    );
+    assert_eq!(
+      state.next_end(punctuation_tail_after_sixty.as_bytes(), 0),
+      None
+    );
   }
 }
