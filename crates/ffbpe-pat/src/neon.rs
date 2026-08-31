@@ -2,7 +2,7 @@
 
 use std::arch::aarch64::*;
 
-use crate::simd::AsciiMasks;
+use crate::simd::{AsciiMasks, O200kAsciiMasks};
 
 #[inline(never)]
 pub(super) unsafe fn ascii_masks(pointer: *const u8) -> Option<AsciiMasks> {
@@ -53,6 +53,70 @@ pub(super) unsafe fn ascii_masks(pointer: *const u8) -> Option<AsciiMasks> {
       whitespace: movemask64(whitespace),
       newlines: movemask64(newlines),
       apostrophes: movemask64(apostrophes),
+    })
+  }
+}
+
+/// Classify an ASCII window for o200k's case-sensitive word grammar.
+///
+/// This intentionally remains separate from [`ascii_masks`]: GPT-2 and
+/// cl100k do not need uppercase or slash masks, so their hot path should not
+/// pay to calculate or reduce them.
+#[inline(never)]
+pub(super) unsafe fn o200k_ascii_masks(pointer: *const u8) -> Option<O200kAsciiMasks> {
+  // SAFETY: the shared boundary scanner supplies 64 readable bytes. NEON is a
+  // baseline target feature for Rust's supported AArch64 targets.
+  unsafe {
+    let chunks = [
+      vld1q_u8(pointer),
+      vld1q_u8(pointer.add(16)),
+      vld1q_u8(pointer.add(32)),
+      vld1q_u8(pointer.add(48)),
+    ];
+    let high = chunks.map(|chunk| vcltzq_s8(vreinterpretq_s8_u8(chunk)));
+    let any_high = vorrq_u8(vorrq_u8(high[0], high[1]), vorrq_u8(high[2], high[3]));
+    if vmaxvq_u8(any_high) != 0 {
+      return None;
+    }
+
+    let case_bits = vdupq_n_u8(0x20);
+    let upper_a = vdupq_n_u8(b'A');
+    let lower_a = vdupq_n_u8(b'a');
+    let letter_width = vdupq_n_u8(25);
+    let zero = vdupq_n_u8(b'0');
+    let digit_width = vdupq_n_u8(9);
+    let space = vdupq_n_u8(b' ');
+    let whitespace_start = vdupq_n_u8(9);
+    let whitespace_width = vdupq_n_u8(4);
+    let carriage_return = vdupq_n_u8(b'\r');
+    let line_feed = vdupq_n_u8(b'\n');
+    let apostrophe = vdupq_n_u8(b'\'');
+    let slash = vdupq_n_u8(b'/');
+
+    let letters =
+      chunks.map(|chunk| vcleq_u8(vsubq_u8(vorrq_u8(chunk, case_bits), lower_a), letter_width));
+    let uppercase = chunks.map(|chunk| vcleq_u8(vsubq_u8(chunk, upper_a), letter_width));
+    let digits = chunks.map(|chunk| vcleq_u8(vsubq_u8(chunk, zero), digit_width));
+    let spaces = chunks.map(|chunk| vceqq_u8(chunk, space));
+    let whitespace = chunks.map(|chunk| {
+      vorrq_u8(
+        vceqq_u8(chunk, space),
+        vcleq_u8(vsubq_u8(chunk, whitespace_start), whitespace_width),
+      )
+    });
+    let newlines =
+      chunks.map(|chunk| vorrq_u8(vceqq_u8(chunk, carriage_return), vceqq_u8(chunk, line_feed)));
+    let apostrophes = chunks.map(|chunk| vceqq_u8(chunk, apostrophe));
+    let slashes = chunks.map(|chunk| vceqq_u8(chunk, slash));
+    Some(O200kAsciiMasks {
+      letters: movemask64(letters),
+      uppercase: movemask64(uppercase),
+      digits: movemask64(digits),
+      spaces: movemask64(spaces),
+      whitespace: movemask64(whitespace),
+      newlines: movemask64(newlines),
+      apostrophes: movemask64(apostrophes),
+      slashes: movemask64(slashes),
     })
   }
 }

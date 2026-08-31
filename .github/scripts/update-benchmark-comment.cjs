@@ -17,7 +17,7 @@ const SCAN_PATTERN_LABELS = new Map([
   ['o200k', 'o200k'],
   ['unknown', 'unknown fallback'],
 ]);
-const SIMD_SCAN_PATTERNS = new Set(['gpt2', 'r50k', 'cl100k']);
+const SIMD_SCAN_PATTERNS = new Set(['gpt2', 'r50k', 'cl100k', 'o200k']);
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -789,7 +789,7 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     `| Base | ${simdBuildLabel(baseline.pretokenizerSimdScan)} |`,
     `| PR | ${simdBuildLabel(candidate.pretokenizerSimdScan)} |`,
     '',
-    `Median scan time over paired samples (${scanInputSize(candidate.pretokenizerSimdScan.report)}). The optional backend applies to ASCII-led GPT-2, r50k, and cl100k inputs; Chinese rows are scalar controls.`,
+    `Median scan time over paired samples (${scanInputSize(candidate.pretokenizerSimdScan.report)}). The optional backend applies to ASCII-led GPT-2, r50k, cl100k, and o200k inputs; Chinese rows are scalar controls.`,
     '',
     '| Pattern / corpus | Base `simd` | PR `simd` | Feature Δ | PR scalar → `simd` |',
     '| --- | ---: | ---: | ---: | ---: |',
