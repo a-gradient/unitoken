@@ -95,6 +95,41 @@ jobs:
             "$GITHUB_WORKSPACE/benchmark-results/baseline" \
             "$GITHUB_WORKSPACE/benchmark-results/candidate"
 
+      - name: Render benchmark report preview
+        id: report_preview
+        if: always()
+        continue-on-error: true
+        env:
+          BASELINE_OUTCOME: ${{ steps.baseline.outcome }}
+          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
+          REPORT_CONTRACT_OUTCOME: ${{ steps.report_contract.outcome }}
+          BENCHMARK_RESULTS_DIR: ${{ github.workspace }}/benchmark-results
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { buildComment } = require(
+            './candidate/.github/scripts/update-benchmark-comment.cjs'
+          );
+          const outcomes = [
+            process.env.BASELINE_OUTCOME,
+            process.env.CANDIDATE_OUTCOME,
+            process.env.REPORT_CONTRACT_OUTCOME,
+          ];
+          const body = buildComment({
+            resultsDir: process.env.BENCHMARK_RESULTS_DIR,
+            conclusion: outcomes.every((outcome) => outcome === 'success')
+              ? 'success'
+              : 'failure',
+            baseSha: process.env.BASE_SHA,
+            headSha: process.env.HEAD_SHA,
+            runUrl: process.env.RUN_URL,
+          });
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${body}\n`);
+          NODE
+
       - name: Upload benchmark reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -110,7 +145,9 @@ jobs:
           BASELINE_OUTCOME: ${{ steps.baseline.outcome }}
           CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
           REPORT_CONTRACT_OUTCOME: ${{ steps.report_contract.outcome }}
+          REPORT_PREVIEW_OUTCOME: ${{ steps.report_preview.outcome }}
         run: |
           test "$BASELINE_OUTCOME" = success
           test "$CANDIDATE_OUTCOME" = success
           test "$REPORT_CONTRACT_OUTCOME" = success
+          test "$REPORT_PREVIEW_OUTCOME" = success

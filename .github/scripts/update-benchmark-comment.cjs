@@ -330,6 +330,21 @@ function scanRows(report) {
   return rows;
 }
 
+function scanInputSize(report) {
+  const inputBytes = new Set(
+    (report?.samples ?? [])
+      .map((sample) => finiteNumber(sample?.request?.input_bytes))
+      .filter((value) => value !== null),
+  );
+  if (inputBytes.size === 0) {
+    return 'unknown input size';
+  }
+  if (inputBytes.size === 1) {
+    return `${formatMebibytes([...inputBytes][0])} per corpus`;
+  }
+  return 'mixed input sizes';
+}
+
 function unionScanRows(baseline, candidate) {
   const rows = new Map();
   for (const [key, row] of baseline) {
@@ -751,7 +766,8 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     '',
     '### Pretokenizer pattern scan',
     '',
-    'Median scan time over paired samples; `PR vs regex` compares normal dispatch with direct `fancy-regex` on the PR revision.',
+    `Median scan time over paired samples (${scanInputSize(candidate.pretokenizerScan.report)}); `
+      + '`PR vs regex` compares normal dispatch with direct `fancy-regex` on the PR revision.',
     '',
     '| Pattern / corpus | Base dispatch | PR dispatch | Δ | PR vs regex |',
     '| --- | ---: | ---: | ---: | ---: |',
@@ -768,7 +784,12 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     '',
     '### Optional SIMD pattern scan',
     '',
-    `Feature builds: base ${simdBuildLabel(baseline.pretokenizerSimdScan)}; PR ${simdBuildLabel(candidate.pretokenizerSimdScan)}. The optional backend applies to ASCII-led GPT-2 and r50k inputs; Chinese rows are scalar controls.`,
+    '| Revision | SIMD configuration |',
+    '| --- | --- |',
+    `| Base | ${simdBuildLabel(baseline.pretokenizerSimdScan)} |`,
+    `| PR | ${simdBuildLabel(candidate.pretokenizerSimdScan)} |`,
+    '',
+    `Median scan time over paired samples (${scanInputSize(candidate.pretokenizerSimdScan.report)}). The optional backend applies to ASCII-led GPT-2 and r50k inputs; Chinese rows are scalar controls.`,
     '',
     '| Pattern / corpus | Base `simd` | PR `simd` | Feature Δ | PR scalar → `simd` |',
     '| --- | ---: | ---: | ---: | ---: |',

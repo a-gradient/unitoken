@@ -209,8 +209,13 @@ test('buildComment renders a comparable trainer delta with legacy BBPE defaults'
     assert.match(comment, /r50k — english/);
     assert.match(
       comment,
-      /Feature builds: base `simd` enabled, AVX2 available; PR `simd` enabled, AVX2 available/,
+      /\| Base \| `simd` enabled, AVX2 available \|/,
     );
+    assert.match(
+      comment,
+      /\| PR \| `simd` enabled, AVX2 available \|/,
+    );
+    assert.match(comment, /1\.0 MiB per corpus/);
     assert.match(
       comment,
       /GPT-2 — english \| 0\.88 ms \| 0\.97 ms \| \+10\.0% \| 1\.25×/,
@@ -269,6 +274,34 @@ test('buildComment renders a candidate SIMD scan when the base report is absent'
       comment,
       /GPT-2 — english \| missing \| 0\.97 ms \| n\/a \| 1\.25×/,
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('buildComment identifies an available NEON backend', () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unitoken-benchmark-comment-'),
+  );
+  try {
+    populateReports(root, 'baseline', 1);
+    populateReports(root, 'candidate', 1);
+    const reportPath = path.join(
+      root,
+      'candidate',
+      'pretokenizer-scan-simd.json',
+    );
+    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+    report.build.available_simd_backend = 'neon';
+    fs.writeFileSync(reportPath, JSON.stringify(report));
+    const comment = buildComment({
+      resultsDir: root,
+      conclusion: 'success',
+      baseSha: '0123456789abcdef',
+      headSha: 'fedcba9876543210',
+      runUrl: 'https://example.test/actions/runs/1',
+    });
+    assert.match(comment, /\| PR \| `simd` enabled, NEON available \|/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
