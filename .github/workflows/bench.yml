@@ -86,11 +86,12 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          validator=candidate/.github/scripts/validate-benchmark-reports.sh
           if [[ -f baseline/.github/scripts/validate-benchmark-reports.sh ]]; then
-            validator=baseline/.github/scripts/validate-benchmark-reports.sh
+            bash baseline/.github/scripts/validate-benchmark-reports.sh \
+              "$GITHUB_WORKSPACE/benchmark-results/baseline" \
+              "$GITHUB_WORKSPACE/benchmark-results/candidate"
           fi
-          bash "$validator" \
+          bash candidate/.github/scripts/validate-benchmark-reports.sh \
             "$GITHUB_WORKSPACE/benchmark-results/baseline" \
             "$GITHUB_WORKSPACE/benchmark-results/candidate"
 

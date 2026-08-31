@@ -11,11 +11,13 @@ const TRAINER_LABELS = new Map([
   ['smoke_zh_unicode_bbpe_r90_v1000', 'Chinese Unicode BBPE, vocab 1k'],
 ]);
 const SCAN_PATTERN_LABELS = new Map([
-  ['gpt2', 'GPT-2/r50k'],
+  ['gpt2', 'GPT-2'],
+  ['r50k', 'r50k'],
   ['cl100k', 'cl100k'],
   ['o200k', 'o200k'],
   ['unknown', 'unknown fallback'],
 ]);
+const SIMD_SCAN_PATTERNS = new Set(['gpt2', 'r50k']);
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -83,6 +85,37 @@ function readReport(resultsDir, relativePath, contract, errors) {
 
 function readOptionalReport(resultsDir, relativePath, contract, errors) {
   return loadReport(resultsDir, relativePath, contract, errors, true);
+}
+
+function loadScanReport(
+  resultsDir,
+  relativePath,
+  errors,
+  optional,
+  expectedSimdFeature,
+) {
+  const state = loadReport(
+    resultsDir,
+    relativePath,
+    'unitoken_pretokenizer_scan_regression_v1',
+    errors,
+    optional,
+  );
+  if (state.status !== 'present' || expectedSimdFeature === null) {
+    return state;
+  }
+  const build = state.report.build;
+  const validBackends = new Set(['scalar', 'avx2', 'neon']);
+  if (
+    !isRecord(build)
+    || build.simd_feature_enabled !== expectedSimdFeature
+    || !validBackends.has(build.available_simd_backend)
+    || (!expectedSimdFeature && build.available_simd_backend !== 'scalar')
+  ) {
+    errors.push(relativePath);
+    return { status: 'invalid', report: null };
+  }
+  return state;
 }
 
 function readMetadata(resultsDir) {
@@ -498,6 +531,57 @@ function scanTableRow(row, baselineState, candidateState) {
   return `| ${label} | ${scanCell(baselineState, baseline, 'dispatch')} | ${scanCell(candidateState, candidate, 'dispatch')} | ${delta} | ${speedup} |`;
 }
 
+function simdBuildLabel(state) {
+  if (state.status === 'invalid') {
+    return 'unavailable';
+  }
+  if (state.status === 'absent') {
+    return 'missing';
+  }
+  const build = state.report?.build;
+  if (!isRecord(build) || build.simd_feature_enabled !== true) {
+    return '`simd` enabled (backend unreported)';
+  }
+  const backend = build.available_simd_backend;
+  if (backend === 'avx2') {
+    return '`simd` enabled, AVX2 available';
+  }
+  if (backend === 'neon') {
+    return '`simd` enabled, NEON available';
+  }
+  return '`simd` enabled, scalar fallback';
+}
+
+function simdScanTableRow(
+  row,
+  candidateScalarRows,
+  baselineState,
+  candidateState,
+) {
+  const baseline = row.baseline;
+  const candidate = row.candidate;
+  const scalar = candidateScalarRows.get(JSON.stringify([
+    row.patternName,
+    row.datasetName,
+  ]));
+  let delta = 'n/a';
+  if (baseline && candidate && !baseline.failed && !candidate.failed) {
+    delta = sameWorkloads(baseline, candidate)
+      ? formatDelta(baseline.dispatch, candidate.dispatch)
+      : 'changed';
+  }
+  let featureGain = 'n/a';
+  if (scalar && candidate && !scalar.failed && !candidate.failed) {
+    featureGain = sameWorkloads(scalar, candidate)
+      ? formatSpeedup(scalar.dispatch, candidate.dispatch)
+      : 'changed';
+  }
+  const pattern = SCAN_PATTERN_LABELS.get(row.patternName) ?? row.patternName;
+  const control = row.datasetName === 'chinese' ? ' (scalar control)' : '';
+  const label = escapeTableCell(`${pattern} — ${row.datasetName}${control}`);
+  return `| ${label} | ${scanCell(baselineState, baseline, 'dispatch')} | ${scanCell(candidateState, candidate, 'dispatch')} | ${delta} | ${featureGain} |`;
+}
+
 function reportSet(resultsDir, side, errors) {
   const prefix = `${side}/`;
   return {
@@ -531,12 +615,19 @@ function reportSet(resultsDir, side, errors) {
       'unitoken_codec_regression_v1',
       errors,
     ),
-    pretokenizerScan: loadReport(
+    pretokenizerScan: loadScanReport(
       resultsDir,
       `${prefix}pretokenizer-scan.json`,
-      'unitoken_pretokenizer_scan_regression_v1',
       errors,
       side === 'baseline',
+      side === 'candidate' ? false : null,
+    ),
+    pretokenizerSimdScan: loadScanReport(
+      resultsDir,
+      `${prefix}pretokenizer-scan-simd.json`,
+      errors,
+      side === 'baseline',
+      side === 'candidate' ? true : null,
     ),
   };
 }
@@ -555,6 +646,11 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     scanRows(baseline.pretokenizerScan.report),
     scanRows(candidate.pretokenizerScan.report),
   );
+  const candidateScalarScanRows = scanRows(candidate.pretokenizerScan.report);
+  const simdScanRowsToRender = unionScanRows(
+    scanRows(baseline.pretokenizerSimdScan.report),
+    scanRows(candidate.pretokenizerSimdScan.report),
+  ).filter((row) => SIMD_SCAN_PATTERNS.has(row.patternName));
   const reports = [
     baseline.trainer,
     baseline.pretokenizer,
@@ -562,12 +658,14 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     baseline.unicodeCodec,
     baseline.bbpeUnicodeCodec.report,
     baseline.pretokenizerScan.report,
+    baseline.pretokenizerSimdScan.report,
     candidate.trainer,
     candidate.pretokenizer,
     candidate.byteCodec,
     candidate.unicodeCodec,
     candidate.bbpeUnicodeCodec.report,
     candidate.pretokenizerScan.report,
+    candidate.pretokenizerSimdScan.report,
   ].filter((report) => report !== null);
   const bbpeCodecRegression = baseline.bbpeUnicodeCodec.status === 'present'
     && candidate.bbpeUnicodeCodec.status === 'absent';
@@ -598,7 +696,7 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
     '',
     `Compared \`${baseSha.slice(0, 7)}\` → \`${headSha.slice(0, 7)}\` sequentially on the same runner. Timing deltas are informational.`,
     '',
-    'Trainer and optional-codec cells marked `missing` are absent cases or reports; `unavailable` means a required report is missing or a report is invalid; `failed` means that revision failed its report or case; `changed` means the workloads are not comparable.',
+    'Cells marked `missing` are absent cases or optional reports; `unavailable` means a required report is missing or a report is invalid; `failed` means that revision failed its report or case; `changed` means the workloads are not comparable.',
     '',
     '| Benchmark | Base | PR | Δ |',
     '| --- | ---: | ---: | ---: |',
@@ -663,6 +761,24 @@ function buildComment({ resultsDir, conclusion, baseSha, headSha, runUrl }) {
       row,
       baseline.pretokenizerScan,
       candidate.pretokenizerScan,
+    ));
+  }
+
+  lines.push(
+    '',
+    '### Optional SIMD pattern scan',
+    '',
+    `Feature builds: base ${simdBuildLabel(baseline.pretokenizerSimdScan)}; PR ${simdBuildLabel(candidate.pretokenizerSimdScan)}. The optional backend applies to ASCII-led GPT-2 and r50k inputs; Chinese rows are scalar controls.`,
+    '',
+    '| Pattern / corpus | Base `simd` | PR `simd` | Feature Δ | PR scalar → `simd` |',
+    '| --- | ---: | ---: | ---: | ---: |',
+  );
+  for (const row of simdScanRowsToRender) {
+    lines.push(simdScanTableRow(
+      row,
+      candidateScalarScanRows,
+      baseline.pretokenizerSimdScan,
+      candidate.pretokenizerSimdScan,
     ));
   }
 

@@ -49,10 +49,21 @@ function writeCodecReport(root, side, name, multiplier, gatesPassed = true) {
   }], gatesPassed);
 }
 
-function writeScanReport(root, side, multiplier, gatesPassed = true) {
+function writeScanReport(root, side, multiplier, options = {}) {
+  const {
+    availableSimdBackend = 'scalar',
+    dispatchMultiplier = multiplier,
+    fileName = 'pretokenizer-scan.json',
+    gatesPassed = true,
+    simdFeatureEnabled = false,
+  } = options;
   const samples = [];
-  for (const patternName of ['gpt2', 'cl100k', 'o200k', 'unknown']) {
+  for (const patternName of ['gpt2', 'r50k', 'cl100k', 'o200k', 'unknown']) {
     for (const datasetName of ['english', 'chinese']) {
+      const datasetDispatchMultiplier = simdFeatureEnabled
+        && datasetName === 'chinese'
+        ? multiplier
+        : dispatchMultiplier;
       for (const sampleIndex of [0, 1, 2]) {
         samples.push({
           request: {
@@ -65,7 +76,8 @@ function writeScanReport(root, side, multiplier, gatesPassed = true) {
           },
           status: 'completed',
           measurement: {
-            dispatch_ns: (1_000_000 + sampleIndex * 100_000) * multiplier,
+            dispatch_ns: (1_000_000 + sampleIndex * 100_000)
+              * datasetDispatchMultiplier,
             fancy_regex_ns: (8_000_000 + sampleIndex * 800_000) * multiplier,
           },
           error: null,
@@ -73,14 +85,22 @@ function writeScanReport(root, side, multiplier, gatesPassed = true) {
       }
     }
   }
+  const directory = path.join(root, side);
   writeReport(
     root,
     side,
-    'pretokenizer-scan.json',
+    fileName,
     'unitoken_pretokenizer_scan_regression_v1',
     samples,
     gatesPassed,
   );
+  const reportPath = path.join(directory, fileName);
+  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  report.build = {
+    simd_feature_enabled: simdFeatureEnabled,
+    available_simd_backend: availableSimdBackend,
+  };
+  fs.writeFileSync(reportPath, JSON.stringify(report));
 }
 
 function populateReports(root, side, multiplier, options = {}) {
@@ -140,6 +160,12 @@ function populateReports(root, side, multiplier, options = {}) {
     writeCodecReport(root, side, name, multiplier);
   }
   writeScanReport(root, side, multiplier);
+  writeScanReport(root, side, multiplier, {
+    availableSimdBackend: 'avx2',
+    dispatchMultiplier: multiplier * 0.8,
+    fileName: 'pretokenizer-scan-simd.json',
+    simdFeatureEnabled: true,
+  });
 }
 
 function writeMetadata(root) {
@@ -178,7 +204,20 @@ test('buildComment renders a comparable trainer delta with legacy BBPE defaults'
     assert.match(comment, /Open benchmark run/);
     assert.match(
       comment,
-      /GPT-2\/r50k — english \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 8\.00×/,
+      /GPT-2 — english \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 8\.00×/,
+    );
+    assert.match(comment, /r50k — english/);
+    assert.match(
+      comment,
+      /Feature builds: base `simd` enabled, AVX2 available; PR `simd` enabled, AVX2 available/,
+    );
+    assert.match(
+      comment,
+      /GPT-2 — english \| 0\.88 ms \| 0\.97 ms \| \+10\.0% \| 1\.25×/,
+    );
+    assert.match(
+      comment,
+      /GPT-2 — chinese \(scalar control\) \| 1\.10 ms \| 1\.21 ms \| \+10\.0% \| 1\.00×/,
     );
     assert.match(comment, /unknown fallback — chinese/);
     assert.doesNotMatch(comment, /Codec — Unicode BBPE/);
@@ -203,7 +242,68 @@ test('buildComment renders a candidate scan when the base command is absent', ()
     assert.match(comment, /All base and PR correctness gates passed/);
     assert.match(
       comment,
-      /GPT-2\/r50k — english \| missing \| 1\.21 ms \| n\/a \| 8\.00×/,
+      /GPT-2 — english \| missing \| 1\.21 ms \| n\/a \| 8\.00×/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('buildComment renders a candidate SIMD scan when the base report is absent', () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unitoken-benchmark-comment-'),
+  );
+  try {
+    populateReports(root, 'baseline', 1);
+    populateReports(root, 'candidate', 1.1);
+    fs.rmSync(path.join(root, 'baseline', 'pretokenizer-scan-simd.json'));
+    const comment = buildComment({
+      resultsDir: root,
+      conclusion: 'success',
+      baseSha: '0123456789abcdef',
+      headSha: 'fedcba9876543210',
+      runUrl: 'https://example.test/actions/runs/1',
+    });
+    assert.match(comment, /All base and PR correctness gates passed/);
+    assert.match(
+      comment,
+      /GPT-2 — english \| missing \| 0\.97 ms \| n\/a \| 1\.25×/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('buildComment rejects candidate SIMD reports from a default build', () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unitoken-benchmark-comment-'),
+  );
+  try {
+    populateReports(root, 'baseline', 1);
+    populateReports(root, 'candidate', 1.1);
+    const reportPath = path.join(
+      root,
+      'candidate',
+      'pretokenizer-scan-simd.json',
+    );
+    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+    report.build.simd_feature_enabled = false;
+    fs.writeFileSync(reportPath, JSON.stringify(report));
+    const comment = buildComment({
+      resultsDir: root,
+      conclusion: 'failure',
+      baseSha: '0123456789abcdef',
+      headSha: 'fedcba9876543210',
+      runUrl: 'https://example.test/actions/runs/1',
+    });
+    assert.match(comment, /benchmark run or at least one correctness gate failed/);
+    assert.match(
+      comment,
+      /Missing or invalid reports: `candidate\/pretokenizer-scan-simd\.json`/,
+    );
+    assert.match(
+      comment,
+      /GPT-2 — english \| 0\.88 ms \| unavailable \| n\/a \| n\/a/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

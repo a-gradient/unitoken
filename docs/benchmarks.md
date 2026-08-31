@@ -39,6 +39,14 @@ cargo bench --bench regression -- pretokenizer-scan \
   --repeats 9 --max-bytes 5242880 --output out/benchmarks/pat-scan.json
 ```
 
+The automated PR report runs this default build on both revisions, then repeats
+the scan with `--features simd` as a separate report. Its SIMD section compares
+the feature builds across revisions and the PR's scalar and feature builds on
+the same inputs. The report records whether AVX2, NEON, or only the scalar
+fallback was available. GPT-2 and r50k are reported separately; Chinese rows
+are controls because their leading non-ASCII window disables the optional
+ASCII SIMD backend.
+
 The standalone crate benchmark additionally covers generated mixed-script
 text, long ASCII words, code, and case transitions. It consumes token slices
 and byte lengths rather than measuring a special count-only path.
