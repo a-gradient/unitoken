@@ -1,6 +1,6 @@
 [project]
 name = "ffbpe"
-version = "0.1.9"
+version = "0.1.10"
 description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
 readme = "README.md"
 requires-python = ">=3.11"
