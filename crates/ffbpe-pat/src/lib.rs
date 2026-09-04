@@ -90,6 +90,59 @@ impl Pattern {
     }
   }
 
+  /// Visit pretokens using SIMD boundary batches when the input is eligible.
+  ///
+  /// The caller observes the same ordered, fallible callback contract as
+  /// [`Self::split`]. Inputs that cannot use SIMD retain scalar scanning.
+  #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+  #[doc(hidden)]
+  pub fn try_for_each_simd<'a, E>(
+    self,
+    text: &'a str,
+    emit: &mut impl FnMut(&'a str) -> Result<(), E>,
+  ) -> Result<(), E> {
+    let bytes = text.as_bytes();
+    let scheme = match self {
+      Pattern::Gpt2 | Pattern::R50k => simd::SimdScheme::Gpt2,
+      Pattern::Cl100k => simd::SimdScheme::Cl100k,
+      Pattern::O200k => simd::SimdScheme::O200k,
+    };
+    let mut simd = simd::BoundaryState::for_text(bytes, Some(scheme));
+    if !simd.is_enabled() {
+      let mut start = 0;
+      while start < text.len() {
+        let end = self.pretoken_end(text, start);
+        debug_assert!(end > start);
+        debug_assert!(text.is_char_boundary(end));
+        emit(&text[start..end])?;
+        start = end;
+      }
+      return Ok(());
+    }
+
+    let mut ends = [0; simd::MAX_TRUSTED_ENDS];
+    let mut start = 0;
+    while start < text.len() {
+      let end_count = simd.fill_trusted_ends(bytes, start, &mut ends);
+      if end_count == 0 {
+        let end = self.pretoken_end(text, start);
+        debug_assert!(end > start);
+        debug_assert!(text.is_char_boundary(end));
+        emit(&text[start..end])?;
+        start = end;
+        continue;
+      }
+
+      for end in ends[..end_count].iter().copied() {
+        debug_assert!(end > start);
+        debug_assert!(text.is_char_boundary(end));
+        emit(&text[start..end])?;
+        start = end;
+      }
+    }
+    Ok(())
+  }
+
   fn pretoken_end(self, text: &str, start: usize) -> usize {
     match self {
       Self::Gpt2 | Self::R50k => gpt2::pretoken_end(text, start),
@@ -194,6 +247,52 @@ mod tests {
         .collect::<Vec<_>>(),
       actual,
     );
+  }
+
+  #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+  #[test]
+  fn simd_callback_matches_regex_and_stops_at_each_error() {
+    let texts = [
+      "Hello, world! It's 2026. ".repeat(16),
+      "你好，世界！Now是2024年。 ".repeat(16),
+      "parseHTTPResponse camelCase can'ts !\r\n// \t".repeat(16),
+      format!("{}'ll {}", "a".repeat(59), "!word ".repeat(32)),
+      format!("{}你好{}", "a".repeat(64), "?B ".repeat(32)),
+      "a!b?c,d.e/f ".repeat(64),
+    ];
+    for pattern in Pattern::ALL {
+      let regex = Regex::new(pattern.regex()).unwrap();
+      for text in &texts {
+        let expected = regex
+          .find_iter(text)
+          .map(|found| found.unwrap().as_str())
+          .collect::<Vec<_>>();
+        let mut actual = Vec::new();
+        pattern
+          .try_for_each_simd(text, &mut |token| {
+            actual.push(token);
+            Ok::<_, usize>(())
+          })
+          .unwrap();
+        assert_eq!(actual, expected, "pattern={pattern:?}, text={text:?}");
+
+        for stop_at in 1..=expected.len() {
+          let mut actual = Vec::new();
+          let result = pattern.try_for_each_simd(text, &mut |token| {
+            actual.push(token);
+            if actual.len() == stop_at {
+              Err(stop_at)
+            } else {
+              Ok(())
+            }
+          });
+          assert_eq!(result, Err(stop_at));
+          assert_eq!(actual.len(), stop_at);
+          assert_eq!(&actual[..actual.len() - 1], &expected[..stop_at - 1]);
+          assert_eq!(actual.last(), expected.get(stop_at - 1));
+        }
+      }
+    }
   }
 
   #[test]
