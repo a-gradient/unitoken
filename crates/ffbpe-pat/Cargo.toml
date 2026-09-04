@@ -1,6 +1,6 @@
 [package]
 name = "ffbpe-pat"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Specialized, zero-copy scanners for common tokenizer PAT expressions"
 repository = "https://github.com/tokn-ai/ffbpe"

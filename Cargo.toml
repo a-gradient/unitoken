@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "ffbpe"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 description = "Unicode-aware, streaming BPE training and tiktoken-compatible encoding"
 repository = "https://github.com/tokn-ai/ffbpe"
@@ -37,7 +37,7 @@ fancy-regex = "0.16.2"
 lazy_static = "1.5.0"
 ordermap = { version = "1.0.0", features = ["serde"] }
 memchr = "2.7.6"
-ffbpe-pat = { version = "0.1.0", path = "crates/ffbpe-pat" }
+ffbpe-pat = { version = "0.1.1", path = "crates/ffbpe-pat" }
 serde_json = "1.0.145"
 thiserror = "2.0.17"
 rayon = "1.11.0"

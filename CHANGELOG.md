@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.10 — 2026-09-04
+
+### Changed
+
+- Accelerated the built-in GPT-2, r50k, cl100k, and o200k PAT pretokenizers
+  with portable SWAR scanning and a faster Unicode path.
+- Added the optional `simd` Cargo feature for ASCII-led PAT inputs: NEON on
+  AArch64 and runtime-detected AVX2 on x86_64. Unsupported CPUs and
+  Unicode-led inputs retain scalar scanning and identical token boundaries.
+- Batched trusted SIMD-derived PAT boundaries before invoking downstream
+  callbacks, reducing callback overhead while preserving ordered, fallible
+  emission.
+- Expanded reproducible PAT benchmark reporting to cover scalar and optional
+  SIMD runs, including backend availability.
+
 ## 0.1.9 — 2026-08-13
 
 ### Added

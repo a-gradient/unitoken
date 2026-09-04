@@ -1,6 +1,6 @@
 {
   "name": "@tokn-ai/ffbpe-inspect",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Inspection data for visualizing FFBPE pretokenization and tokenization",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -24,7 +24,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "peerDependencies": {
-    "@tokn-ai/ffbpe": ">=0.1.9 <0.2.0"
+    "@tokn-ai/ffbpe": ">=0.1.10 <0.2.0"
   },
   "devDependencies": {
     "@tokn-ai/ffbpe": "file:../ffbpe",

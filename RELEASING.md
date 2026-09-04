@@ -1,47 +1,58 @@
 # Releasing FFBPE
 
 The repository tag version is shared by the Rust crate, Python package,
-WebAssembly crate, and core npm package. Companion packages follow their own
-versions; for the `v0.1.9` release, `ffbpe-pat` and both npm companions start at
-`0.1.0`.
+WebAssembly crate, and core npm package. `ffbpe-pat` and the npm companion
+packages have independent versions, but every normal release publishes a new
+version of each package named by the release workflow.
 
 ## Prepare
 
 1. Update `Cargo.toml`, `pyproject.toml`, `crates/ffbpe-wasm/Cargo.toml`, and
-   `packages/ffbpe/package.json` to the same version.
-2. Update the companion packages' `@tokn-ai/ffbpe` peer dependency range.
-3. Refresh the local `Cargo.lock` and `uv.lock` files; both are intentionally
+   `packages/ffbpe/package.json` to the new tag version.
+2. Bump `crates/ffbpe-pat/Cargo.toml` to a new published version and update the
+   root `ffbpe-pat` dependency requirement to that exact version.
+3. Bump every npm manifest that `release.yml` publishes: the core
+   `packages/ffbpe/package.json` at the tag version, plus new versions for
+   `packages/ffbpe-inspect/package.json` and
+   `packages/ffbpe-presets/package.json`. Update both companion
+   `@tokn-ai/ffbpe` peer ranges, for example, to `>=0.1.10 <0.2.0`.
+   The normal npm publish job does not skip already-published versions.
+4. Refresh the local `Cargo.lock` and `uv.lock` files; both are intentionally
    ignored by this library repository.
-4. Add the release notes to `CHANGELOG.md`.
-5. Run `.github/scripts/verify-release-versions.py` and the complete CI suite.
+5. Add the release notes to `CHANGELOG.md`.
+6. Run `.github/scripts/verify-release-versions.py` and the complete CI suite.
 
-## First crates.io dependency release
+Before tagging, ensure the GitHub `cargo`, `npm`, and `pypi` environments have
+their trusted-publishing configuration. PyPI publishing uses the `pypi`
+environment in `.github/workflows/wheels.yml`.
 
-`ffbpe 0.1.9` depends on the new `ffbpe-pat 0.1.0` crate. Trusted publishing
-cannot be configured until a crate exists. For this release, a maintainer
-manually published `ffbpe-pat 0.1.0` to create the package identity.
+## Historical v0.1.9 bootstrap
 
-After the package identity exists, add a GitHub Actions trusted publisher for
-`ffbpe-pat` on crates.io with:
+The `v0.1.9` release established package identities required by trusted
+publishing. This was a one-release bootstrap, not normal release preparation.
+
+`ffbpe 0.1.9` depended on the new `ffbpe-pat 0.1.0` crate. Because trusted
+publishing cannot be configured until a crate exists, a maintainer manually
+published `ffbpe-pat 0.1.0` to create its package identity.
+
+The `ffbpe-pat` GitHub Actions trusted publisher on crates.io uses:
 
 - organization: `tokn-ai`
 - repository: `ffbpe`
 - workflow filename: `release.yml`
 - environment: `cargo`
 
-The existing `ffbpe` trusted publisher should use the same values. Revoke the
-manual bootstrap token after configuring trusted publishing. Do not store a
-crates.io publishing token in GitHub.
+The existing `ffbpe` trusted publisher uses the same values. Revoke any manual
+bootstrap token after configuring trusted publishing. Do not store a crates.io
+publishing token in GitHub.
 
-## First npm release
+The three scoped npm packages also had to exist before trusted publishing could
+be configured. A maintainer manually published `@tokn-ai/ffbpe 0.1.9`,
+`@tokn-ai/ffbpe-inspect 0.1.0`, and `@tokn-ai/ffbpe-presets 0.1.0` to create
+their package identities.
 
-The three scoped packages must be created before npm trusted publishing can be
-configured in their package settings. For this release, a maintainer manually
-published `@tokn-ai/ffbpe 0.1.9`, `@tokn-ai/ffbpe-inspect 0.1.0`, and
-`@tokn-ai/ffbpe-presets 0.1.0` to create the package identities.
-
-After the package identities exist, create the `npm` GitHub environment and
-configure each package's npm trusted publisher with:
+After the package identities existed, the `npm` GitHub environment and each
+package's npm trusted publisher were configured with:
 
 - organization: `tokn-ai`
 - repository: `ffbpe`
@@ -54,19 +65,20 @@ publishing. Do not store an npm publishing token in GitHub.
 
 The `v0.1.9` release workflow verifies these four exact manual publications,
 skips their publish steps, and publishes only `ffbpe 0.1.9` to crates.io and
-PyPI through their existing trusted publishers. This is a one-release
-exception. Later releases publish all crates.io and npm packages normally in
-dependency order; existing release versions are errors rather than silently
-skipped.
+PyPI through their existing trusted publishers. It is a one-release exception.
+Later releases publish `ffbpe-pat` and `ffbpe` to crates.io in dependency
+order, then all three npm packages. Existing release versions are errors rather
+than silently skipped.
 
 ## Tag and publish
 
-Only tag a commit on `master` after its CI checks pass, all first versions are
-available in their registries, and every trusted publisher is configured:
+Only tag the committed release preparation on `master` after the version
+verifier and full CI pass, every package version is new in its registry, and
+every trusted publisher is configured:
 
 ```sh
-git tag -a v0.1.9 -m "FFBPE 0.1.9"
-git push origin v0.1.9
+git tag -a v0.1.10 -m "FFBPE 0.1.10"
+git push origin v0.1.10
 ```
 
 The tag starts three publication paths:
