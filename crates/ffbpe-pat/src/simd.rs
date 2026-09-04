@@ -6,6 +6,9 @@ pub(super) const BATCH_BYTES: usize = 64;
 // Boundaries through byte 60 are independent of contractions that begin too
 // close to the right edge. Later tokens fall back to the scalar scanner.
 const TRUSTED_BITS: u64 = (1_u64 << 61) - 1;
+// Bit zero is the current token start, so a trusted 64-byte window can yield
+// at most the following 60 token ends (bits 1 through 60).
+pub(super) const MAX_TRUSTED_ENDS: usize = TRUSTED_BITS.count_ones() as usize - 1;
 
 #[derive(Clone, Copy)]
 pub(super) struct AsciiMasks {
@@ -175,6 +178,74 @@ impl BoundaryState {
     self.cursor = Some(start);
     self.starts = starts;
     self.pop_start()
+  }
+
+  /// Drain one all-ASCII window's already-trusted ends into `ends`.
+  ///
+  /// Its setup duplicates [`Self::next_end`] so that the legacy iterator's
+  /// generated code remains exactly the production baseline.
+  #[inline(never)]
+  pub(super) fn fill_trusted_ends(
+    &mut self,
+    bytes: &[u8],
+    start: usize,
+    ends: &mut [usize; MAX_TRUSTED_ENDS],
+  ) -> usize {
+    let Some(classifier) = self.classifier else {
+      return 0;
+    };
+    let Some(scheme) = self.scheme else {
+      return 0;
+    };
+    if self.cursor == Some(start) {
+      if self.starts != 0 {
+        return self.drain_trusted_ends(ends);
+      }
+      self.blocked_until = self.base.saturating_add(BATCH_BYTES);
+    }
+
+    self.cursor = None;
+    self.starts = 0;
+    if start < self.blocked_until || bytes.len() - start < BATCH_BYTES {
+      return 0;
+    }
+    if !bytes[start].is_ascii() {
+      // Dense Unicode runs commonly advance by only a few bytes per token.
+      // Do not pay for a full-vector ASCII eligibility probe on each block.
+      self.blocked_until = start + BATCH_BYTES;
+      return 0;
+    }
+
+    let Some(starts) = token_starts(bytes, start, classifier, scheme) else {
+      // Avoid reclassifying the same Unicode-containing window for every
+      // scalar token within it.
+      self.blocked_until = start + BATCH_BYTES;
+      return 0;
+    };
+    let starts = starts & TRUSTED_BITS & !1;
+    if starts == 0 {
+      self.blocked_until = start + BATCH_BYTES;
+      return 0;
+    }
+
+    self.base = start;
+    self.cursor = Some(start);
+    self.starts = starts;
+    self.drain_trusted_ends(ends)
+  }
+
+  #[inline]
+  fn drain_trusted_ends(&mut self, ends: &mut [usize; MAX_TRUSTED_ENDS]) -> usize {
+    let mut count = 0;
+    while let Some(end) = self.pop_start() {
+      debug_assert!(count < ends.len());
+      ends[count] = end;
+      count += 1;
+    }
+    debug_assert!(count <= ends.len());
+    self.cursor = None;
+    self.blocked_until = self.base.saturating_add(BATCH_BYTES);
+    count
   }
 
   #[inline]
@@ -546,6 +617,42 @@ mod tests {
     cached
   }
 
+  fn assert_batched_boundary_state_matches_scalar(
+    text: &str,
+    scheme: SimdScheme,
+    pretoken_end: fn(&str, usize) -> usize,
+  ) -> usize {
+    let bytes = text.as_bytes();
+    let mut state = BoundaryState::for_text(bytes, Some(scheme));
+    if !state.is_enabled() {
+      return 0;
+    }
+
+    let mut ends = [0; MAX_TRUSTED_ENDS];
+    let mut position = 0;
+    let mut batches = 0;
+    while position < text.len() {
+      let count = state.fill_trusted_ends(bytes, position, &mut ends);
+      if count == 0 {
+        position = pretoken_end(text, position);
+        continue;
+      }
+
+      batches += 1;
+      for end in ends[..count].iter().copied() {
+        let expected = pretoken_end(text, position);
+        assert_eq!(
+          end,
+          expected,
+          "position={position}, scheme={scheme:?}, batched ends={:?}",
+          &ends[..count],
+        );
+        position = end;
+      }
+    }
+    batches
+  }
+
   fn random_ascii_text(len: usize) -> String {
     random_ascii_text_from_seed(len, 0x9e37_79b9_7f4a_7c15)
   }
@@ -788,6 +895,38 @@ mod tests {
     let cached =
       assert_boundary_state_matches_scalar(&text, SimdScheme::O200k, crate::o200k::pretoken_end);
     assert!(cached > 1_000, "boundary cache did not engage often enough");
+  }
+
+  #[test]
+  fn batched_boundary_state_matches_scalar_across_ascii_and_unicode_transitions() {
+    if Classifier::detect().is_none() {
+      return;
+    }
+
+    let ascii = random_ascii_text(32_768);
+    let mut ascii_unicode_ascii = random_ascii_text(4_096);
+    ascii_unicode_ascii.push_str(" 中文后继续 ASCII words 123456 !word\r\n");
+    ascii_unicode_ascii.push_str(&random_ascii_text(4_096));
+
+    for (case, text) in [
+      ("ascii", &ascii),
+      ("ascii_unicode_ascii", &ascii_unicode_ascii),
+    ] {
+      for (scheme, pretoken_end) in [
+        (
+          SimdScheme::Gpt2,
+          crate::gpt2::pretoken_end as fn(&str, usize) -> usize,
+        ),
+        (SimdScheme::Cl100k, crate::cl100k::pretoken_end),
+        (SimdScheme::O200k, crate::o200k::pretoken_end),
+      ] {
+        let batches = assert_batched_boundary_state_matches_scalar(text, scheme, pretoken_end);
+        assert!(
+          batches > 0,
+          "batched scanner did not engage for case={case}, scheme={scheme:?}",
+        );
+      }
+    }
   }
 
   #[test]

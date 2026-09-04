@@ -533,10 +533,17 @@ fn for_each_pattern_pretoken<'a>(
   mut emit: impl FnMut(&'a str) -> MyResult<()>,
 ) -> MyResult<()> {
   if let Some(pattern) = KnownPattern::recognize(pat.as_str()) {
-    for token in pattern.split(s) {
-      emit(token)?;
+    #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+      return pattern.try_for_each_simd(s, &mut emit);
     }
-    return Ok(());
+    #[cfg(not(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64"))))]
+    {
+      for token in pattern.split(s) {
+        emit(token)?;
+      }
+      return Ok(());
+    }
   }
   for found in pat.find_iter(s) {
     let token = found?.as_str();
@@ -1071,6 +1078,66 @@ mod tests {
     .into_iter()
     .map(|pattern| Regex::new(pattern).unwrap())
     .collect()
+  }
+
+  #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+  #[test]
+  fn known_simd_visitor_matches_regex() {
+    let text = format!("{}'ll {}你好", "a".repeat(64), "!?word ".repeat(32));
+    for pattern in [
+      DEFAULT_PAT_STR,
+      R50K_PAT_STR,
+      CL100K_PAT_STR,
+      O200K_PAT_STR,
+    ] {
+      let pre_tokenizer = PreTokenizer::try_new(&[], None, Some(pattern)).unwrap();
+      let mut actual = Vec::new();
+      pre_tokenizer
+        .for_each_pretoken(&text, |token| actual.push(token))
+        .unwrap();
+      assert_eq!(actual, reference_tokens(&Regex::new(pattern).unwrap(), &text));
+    }
+  }
+
+  #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+  #[test]
+  fn known_simd_visitor_stops_after_unicode_bigram_callback_error() {
+    let pat = Regex::new(DEFAULT_PAT_STR).unwrap();
+    let text = format!("{}你好世界 {}", "word ".repeat(16), "tail ".repeat(16));
+    let unicode_bigrams = AHashSet::new();
+    let mut expected = Vec::new();
+    for_each_pretoken(
+      &text,
+      &pat,
+      Some(&unicode_bigrams),
+      UnicodeBigramMixedBoundary::Split,
+      |token| {
+        expected.push(token);
+        Ok(())
+      },
+    )
+    .unwrap();
+    assert!(expected.windows(4).any(|tokens| tokens == ["你", "好", "世", "界"]));
+
+    for stop_at in 1..=expected.len() {
+      let mut actual = Vec::new();
+      let result = for_each_pretoken(
+        &text,
+        &pat,
+        Some(&unicode_bigrams),
+        UnicodeBigramMixedBoundary::Split,
+        |token| {
+          actual.push(token);
+          if actual.len() == stop_at {
+            Err(MyError::SourceBatch("stop"))
+          } else {
+            Ok(())
+          }
+        },
+      );
+      assert!(matches!(result, Err(MyError::SourceBatch("stop"))));
+      assert_eq!(actual, expected[..stop_at]);
+    }
   }
 
   #[test]
